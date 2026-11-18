@@ -9,17 +9,20 @@ use crate::session::Phase;
 /// with Windows".
 pub const LAUNCHED_AT_LOGIN_FLAG: &str = "--launched-at-login";
 
-/// True if the app should start with no window: it was launched at login.
-/// A missing overlay debug switch wins over the login launch, so the window
-/// opens and the user can fix the overlay before a match.
+/// True if the app should start with no window: it was launched at login,
+/// or it is restarting into an update it installed by itself (see
+/// `update::take_relaunch_mark`). A missing overlay debug switch wins over
+/// both, so the window opens and the user can fix the overlay before a match.
 pub fn starts_hidden<I: IntoIterator<Item = S>, S: AsRef<str>>(
     args: I,
     overlay_switch_missing: bool,
+    relaunched_after_update: bool,
 ) -> bool {
     !overlay_switch_missing
-        && args
-            .into_iter()
-            .any(|arg| arg.as_ref() == LAUNCHED_AT_LOGIN_FLAG)
+        && (relaunched_after_update
+            || args
+                .into_iter()
+                .any(|arg| arg.as_ref() == LAUNCHED_AT_LOGIN_FLAG))
 }
 
 /// The tray icon's tooltip for a status. The wording follows the window's
@@ -58,6 +61,8 @@ mod tests {
         Status {
             phase,
             match_id: match_id.map(str::to_string),
+            test_recording_running: false,
+            test_recording_allowed: false,
         }
     }
 
@@ -88,14 +93,20 @@ mod tests {
     #[test]
     fn a_launch_at_login_starts_with_no_window() {
         let exe = "shadowplay-recorder.exe";
-        assert!(starts_hidden([exe, LAUNCHED_AT_LOGIN_FLAG], false));
-        assert!(!starts_hidden([exe], false));
+        assert!(starts_hidden([exe, LAUNCHED_AT_LOGIN_FLAG], false, false));
+        assert!(!starts_hidden([exe], false, false));
+    }
+
+    #[test]
+    fn the_restart_into_an_update_starts_with_no_window() {
+        let exe = "shadowplay-recorder.exe";
+        assert!(starts_hidden([exe], false, true));
     }
 
     #[test]
     fn a_missing_overlay_switch_opens_the_window_even_at_login() {
         let exe = "shadowplay-recorder.exe";
-        assert!(!starts_hidden([exe, LAUNCHED_AT_LOGIN_FLAG], true));
-        assert!(!starts_hidden([exe], true));
+        assert!(!starts_hidden([exe, LAUNCHED_AT_LOGIN_FLAG], true, false));
+        assert!(!starts_hidden([exe], true, true));
     }
 }

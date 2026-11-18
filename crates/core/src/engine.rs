@@ -51,6 +51,26 @@ impl Host for SystemHost {
 pub struct Status {
     pub phase: Phase,
     pub match_id: Option<String>,
+    /// A test recording is running. The phase stays what it was meanwhile.
+    pub test_recording_running: bool,
+    /// A test recording may be started now.
+    pub test_recording_allowed: bool,
+}
+
+impl Status {
+    /// The status before the engine's first step.
+    pub fn idle() -> Self {
+        Self::of(Phase::Idle, None, false)
+    }
+
+    fn of(phase: Phase, match_id: Option<String>, test_recording_running: bool) -> Self {
+        Self {
+            phase,
+            match_id,
+            test_recording_running,
+            test_recording_allowed: !test_recording_running && test_recording::allowed_in(phase),
+        }
+    }
 }
 
 pub struct Engine<C: RecordChannel, W: GameWindow, H: Host> {
@@ -120,17 +140,27 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
     }
 
     pub fn status(&self) -> Status {
-        Status {
-            phase: self.session.phase(),
-            match_id: self.session.match_id().map(str::to_string),
-        }
+        self.status_with(false)
+    }
+
+    fn status_with(&self, test_recording_running: bool) -> Status {
+        Status::of(
+            self.session.phase(),
+            self.session.match_id().map(str::to_string),
+            test_recording_running,
+        )
     }
 
     /// Runs the setup checklist's test recording and returns the path of the
     /// file it recorded. Refused unless the phase is idle or game running.
     /// Blocks for the test's length and its wait for a late file; no step
-    /// runs meanwhile, so a match cannot start during the test.
-    pub fn test_recording(&mut self) -> Result<String, TestRecordingError> {
+    /// runs meanwhile, so a match cannot start during the test. `report` is
+    /// handed the status as the test starts and again as it ends, so the rest
+    /// of the app (the update gate among it) knows a test is running.
+    pub fn test_recording(
+        &mut self,
+        mut report: impl FnMut(&Status),
+    ) -> Result<String, TestRecordingError> {
         let phase = self.session.phase();
         if !test_recording::allowed_in(phase) {
             log::info!("test recording refused: the recorder is busy ({phase:?})");
@@ -140,7 +170,10 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             return Err(TestRecordingError::NoRecordingsFolder);
         };
         let timing = self.test_recording_timing;
-        test_recording::run(self.channel_mut(), Path::new(&folder), timing)
+        report(&self.status_with(true));
+        let result = test_recording::run(self.channel_mut(), Path::new(&folder), timing);
+        report(&self.status());
+        result
     }
 
     pub fn step(&mut self, now: Duration, wall: SystemTime) -> Status {
@@ -226,6 +259,7 @@ mod tests {
     use crate::overlay::RecordCommand;
     use crate::recorder::RenameTiming;
     use crate::recorder::testing::{FakeChannel, Mode};
+    use crate::update;
 
     struct FakeHost {
         running: Rc<Cell<bool>>,
@@ -440,12 +474,30 @@ mod tests {
     fn a_test_recording_names_the_file_it_recorded() {
         let mut f = Fixture::new(true);
         f.run(1);
-        let recording = f.engine.test_recording().unwrap();
+        let recording = f.engine.test_recording(|_| {}).unwrap();
         assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
         assert_eq!(
             Path::new(&recording),
             f.recordings.join("DefaultShadowPlay.mp4")
         );
+    }
+
+    #[test]
+    fn no_update_installs_while_a_test_recording_runs() {
+        let mut f = Fixture::new(true);
+        assert!(update::may_install(&f.run(1)));
+        let mut reported = Vec::new();
+        f.engine
+            .test_recording(|status| reported.push(status.clone()))
+            .unwrap();
+        let [during, after] = reported.as_slice() else {
+            panic!("expected a status as the test starts and one as it ends: {reported:?}");
+        };
+        assert_eq!(during.phase, Phase::Idle);
+        assert!(during.test_recording_running);
+        assert!(!update::may_install(during));
+        assert!(!after.test_recording_running);
+        assert!(update::may_install(after));
     }
 
     #[test]
@@ -458,7 +510,7 @@ mod tests {
         let sent = f.sent().len();
 
         assert_eq!(
-            f.engine.test_recording(),
+            f.engine.test_recording(|_| {}),
             Err(TestRecordingError::Busy {
                 phase: Phase::Recording
             })
@@ -471,7 +523,7 @@ mod tests {
         let mut f = Fixture::new(true);
         f.running.set(true);
         assert_eq!(f.run(3).phase, Phase::GameRunning);
-        assert!(f.engine.test_recording().is_ok());
+        assert!(f.engine.test_recording(|_| {}).is_ok());
     }
 
     #[test]
@@ -479,7 +531,7 @@ mod tests {
         let mut f = Fixture::new(false);
         f.run(1);
         assert_eq!(
-            f.engine.test_recording(),
+            f.engine.test_recording(|_| {}),
             Err(TestRecordingError::NoRecordingsFolder)
         );
         assert!(f.sent().is_empty());
@@ -490,7 +542,7 @@ mod tests {
         let mut f = Fixture::new(true);
         f.engine.channel_mut().mode = Mode::Fail;
         assert!(matches!(
-            f.engine.test_recording(),
+            f.engine.test_recording(|_| {}),
             Err(TestRecordingError::OverlayUnreachable { .. })
         ));
         assert_eq!(f.sent(), [RecordCommand::Start]);
@@ -501,7 +553,7 @@ mod tests {
         let mut f = Fixture::new(true);
         f.engine.channel_mut().mode = Mode::Reject;
         assert!(matches!(
-            f.engine.test_recording(),
+            f.engine.test_recording(|_| {}),
             Err(TestRecordingError::StartRejected { detail }) if detail.contains("busy")
         ));
         assert_eq!(f.sent(), [RecordCommand::Start]);
@@ -513,7 +565,7 @@ mod tests {
         // ShadowPlay saves somewhere other than the recordings folder.
         f.engine.channel_mut().folder = None;
         assert_eq!(
-            f.engine.test_recording(),
+            f.engine.test_recording(|_| {}),
             Err(TestRecordingError::NoRecordingAppeared {
                 folder: f.recordings.to_string_lossy().into_owned()
             })
@@ -526,7 +578,7 @@ mod tests {
         let mut f = Fixture::new(true);
         // ShadowPlay creates the file only after the test's few seconds.
         f.engine.channel_mut().late_by = Some(Duration::from_millis(100));
-        let recording = f.engine.test_recording().unwrap();
+        let recording = f.engine.test_recording(|_| {}).unwrap();
         assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
         assert_eq!(
             Path::new(&recording),
@@ -538,7 +590,7 @@ mod tests {
     fn a_test_recording_counts_a_command_without_a_reply_as_sent() {
         let mut f = Fixture::new(true);
         f.engine.channel_mut().mode = Mode::NoAck;
-        assert!(f.engine.test_recording().is_ok());
+        assert!(f.engine.test_recording(|_| {}).is_ok());
         assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
     }
 }

@@ -15,12 +15,16 @@
   let running = $state(false);
   let result = $state<{ text: string; error: boolean } | null>(null);
 
-  const phase = $derived(status.current?.phase ?? null);
-  const outOfMatch = $derived(phase === "idle" || phase === "gameRunning");
+  // The app says when a test may run: out of a match, and not while one
+  // is already running.
+  const allowed = $derived(status.current?.testRecordingAllowed ?? false);
+  const inMatch = $derived(
+    status.current !== null && !allowed && !status.current.testRecordingRunning,
+  );
   const disabledReason = $derived(
     !folderSet
       ? "Set a recordings folder first."
-      : !outOfMatch
+      : inMatch
         ? "Available again once the match is over."
         : null,
   );
@@ -40,7 +44,7 @@
       case "startRejected":
         return `The NVIDIA overlay refused to start recording (${error.detail}). Check that ShadowPlay's Record works with Alt+F9, then test again.`;
       case "noRecordingAppeared":
-        return `The record commands were sent, but no recording appeared in ${error.folder}. ShadowPlay probably saves somewhere else: check its folder in the overlay's settings (Alt+Z, Settings, Recordings) and set the same one here.`;
+        return `The start command was sent, but no recording appeared in ${error.folder}. ShadowPlay probably saves somewhere else: check its folder in the overlay's settings (Alt+Z, Settings, Recordings) and set the same one here. If ShadowPlay shows it is recording, press Alt+F9 to stop it.`;
       case "stopFailed":
         return `Recording started (${fileName(error.recording)}) but could not be stopped (${error.detail}). Press Alt+F9 to stop it.`;
     }
@@ -67,7 +71,7 @@
       variant="outline"
       size="sm"
       onclick={test}
-      disabled={running || disabledReason !== null}
+      disabled={running || !allowed || disabledReason !== null}
     >
       {#if running}
         <LoaderCircle class="animate-spin" aria-hidden="true" />

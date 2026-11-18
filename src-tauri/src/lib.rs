@@ -25,11 +25,11 @@ use recorder_core::engine::{Engine, STEP_INTERVAL, Status, SystemHost};
 use recorder_core::game::DEADLOCK;
 use recorder_core::overlay::Overlay;
 use recorder_core::platform::ProcessWindow;
-use recorder_core::session::Phase;
 use recorder_core::settings::Settings;
 use recorder_core::setup::{self, default_recordings_folder};
 use recorder_core::test_recording::TestRecordingError;
 use recorder_core::tray::{LAUNCHED_AT_LOGIN_FLAG, starts_hidden};
+use recorder_core::update::take_relaunch_mark;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_specta::{Builder, Event, collect_commands, collect_events};
@@ -100,21 +100,28 @@ fn run_engine(app: AppHandle, test_requests: Receiver<TestRequest>) {
         let state = app.state::<AppState>();
         engine.apply_settings(state.settings.read().unwrap().clone());
         let status = engine.step(started.elapsed(), SystemTime::now());
-        let changed = {
-            let mut current = state.status.lock().unwrap();
-            let changed = *current != status;
-            *current = status.clone();
-            changed
-        };
-        if changed {
-            tray::show_status(&app, &status);
-            let _ = StatusChanged(status).emit(&app);
-        }
+        publish(&app, &status);
         // The engine refuses the test during a match.
         for reply in test_requests.try_iter() {
-            let _ = reply.send(engine.test_recording());
+            let _ = reply.send(engine.test_recording(|status| publish(&app, status)));
         }
         thread::sleep(STEP_INTERVAL);
+    }
+}
+
+/// Keeps `status` for the window, the tray and the update gate, and tells
+/// them if it changed.
+fn publish(app: &AppHandle, status: &Status) {
+    let changed = {
+        let state = app.state::<AppState>();
+        let mut current = state.status.lock().unwrap();
+        let changed = *current != *status;
+        *current = status.clone();
+        changed
+    };
+    if changed {
+        tray::show_status(app, status);
+        let _ = StatusChanged(status.clone()).emit(app);
     }
 }
 
@@ -157,10 +164,7 @@ pub fn run() {
                 })
                 .unwrap_or_default();
             let (test_sender, test_receiver) = mpsc::channel();
-            let status = Status {
-                phase: Phase::Idle,
-                match_id: None,
-            };
+            let status = Status::idle();
             tray::install(app.handle(), &status)?;
             app.manage(AppState {
                 settings: RwLock::new(settings),
@@ -169,16 +173,19 @@ pub fn run() {
                 test_requests: Mutex::new(test_sender),
             });
             // The window starts hidden (`visible: false`), so a launch at
-            // login shows nothing but the tray icon, unless an NVIDIA App
-            // update removed the overlay's debug switch: then the window
-            // opens so the user can fix it before a match.
+            // login or the restart into an update shows nothing but the tray
+            // icon, unless an NVIDIA App update removed the overlay's debug
+            // switch: then the window opens so the user can fix it before a
+            // match.
             let switch_missing = setup::overlay_switch_missing();
             if switch_missing {
                 log::warn!(
                     "the overlay's debug switch is missing; an NVIDIA App update may have removed it"
                 );
             }
-            if !starts_hidden(std::env::args(), switch_missing) {
+            let after_update = update::relaunch_marker(app.handle())
+                .is_some_and(|marker| take_relaunch_mark(&marker, SystemTime::now()));
+            if !starts_hidden(std::env::args(), switch_missing, after_update) {
                 tray::show_window(app.handle());
             }
 

@@ -148,6 +148,10 @@ export type SetupReport = {
 export type Status = {
 	phase: Phase,
 	matchId: string | null,
+	/**  A test recording is running. The phase stays what it was meanwhile. */
+	testRecordingRunning: boolean,
+	/**  A test recording may be started now. */
+	testRecordingAllowed: boolean,
 };
 
 /**  Emitted whenever the status changes. */

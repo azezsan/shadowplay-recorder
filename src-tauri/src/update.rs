@@ -2,14 +2,17 @@
 //! version while the game is not running.
 //!
 //! The endpoint and the public key that verifies an update's signature are
-//! `plugins.updater` in `tauri.conf.json`. When to check and whether the
-//! phase allows installing are decided by `recorder_core::update`.
+//! `plugins.updater` in `tauri.conf.json`. The attempt itself (the order of
+//! the steps, when to hold back, marking the restart to start in the tray)
+//! is `recorder_core::update::attempt`; this module supplies Tauri's updater.
 
+use std::path::PathBuf;
 use std::thread;
 
-use recorder_core::update::{FIRST_CHECK_DELAY, Outcome, may_install, next_attempt_after};
+use recorder_core::update::{self, FIRST_CHECK_DELAY, Outcome, Updater, next_attempt_after};
+use tauri::async_runtime::block_on;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_updater::UpdaterExt;
+use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::AppState;
 
@@ -22,56 +25,59 @@ pub fn start(app: AppHandle) {
     }
     thread::spawn(move || {
         thread::sleep(FIRST_CHECK_DELAY);
+        let marker = relaunch_marker(&app);
         loop {
-            let outcome = tauri::async_runtime::block_on(attempt(&app));
+            let mut updater = TauriUpdater {
+                app: &app,
+                update: None,
+                bytes: None,
+            };
+            let outcome = update::attempt(&mut updater, marker.as_deref(), || {
+                update::may_install(&app.state::<AppState>().status.lock().unwrap())
+            });
+            if outcome == Outcome::Installed {
+                // Only reached where installing does not end the process
+                // itself; on Windows the installer restarts the app.
+                app.restart();
+            }
             thread::sleep(next_attempt_after(outcome));
         }
     });
 }
 
-fn game_allows_install(app: &AppHandle) -> bool {
-    may_install(app.state::<AppState>().status.lock().unwrap().phase)
+/// Where the restart into an update is marked, so it starts in the tray.
+pub fn relaunch_marker(app: &AppHandle) -> Option<PathBuf> {
+    app.path()
+        .app_local_data_dir()
+        .ok()
+        .map(|folder| folder.join("relaunched-after-update"))
 }
 
-/// Checks once and, if a newer release exists and the phase allows it,
-/// downloads, verifies and installs it, then restarts the app.
-async fn attempt(app: &AppHandle) -> Outcome {
-    let check = async { app.updater()?.check().await };
-    let update = match check.await {
-        Ok(Some(update)) => update,
-        Ok(None) => return Outcome::UpToDate,
-        Err(e) => {
-            log::warn!("could not check for updates: {e}");
-            return Outcome::Failed;
-        }
-    };
-    if !game_allows_install(app) {
-        log::info!(
-            "version {} is available; it will install once Deadlock closes",
-            update.version
-        );
-        return Outcome::Deferred;
+struct TauriUpdater<'a> {
+    app: &'a AppHandle,
+    update: Option<Update>,
+    bytes: Option<Vec<u8>>,
+}
+
+impl Updater for TauriUpdater<'_> {
+    fn check(&mut self) -> Result<Option<String>, String> {
+        let update =
+            block_on(async { self.app.updater()?.check().await }).map_err(|e| e.to_string())?;
+        let version = update.as_ref().map(|u| u.version.clone());
+        self.update = update;
+        Ok(version)
     }
-    log::info!("downloading version {}", update.version);
-    let bytes = match update.download(|_, _| {}, || {}).await {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            log::warn!("could not download version {}: {e}", update.version);
-            return Outcome::Failed;
-        }
-    };
-    // The download can take a while; the game may have started meanwhile.
-    if !game_allows_install(app) {
-        log::info!(
-            "version {} is downloaded; it will install once Deadlock closes",
-            update.version
-        );
-        return Outcome::Deferred;
+
+    fn download(&mut self) -> Result<(), String> {
+        let update = self.update.as_ref().ok_or("no update was found")?;
+        let bytes = block_on(update.download(|_, _| {}, || {})).map_err(|e| e.to_string())?;
+        self.bytes = Some(bytes);
+        Ok(())
     }
-    log::info!("installing version {} and restarting", update.version);
-    if let Err(e) = update.install(bytes) {
-        log::warn!("could not install version {}: {e}", update.version);
-        return Outcome::Failed;
+
+    fn install(&mut self) -> Result<(), String> {
+        let update = self.update.as_ref().ok_or("no update was found")?;
+        let bytes = self.bytes.take().ok_or("the update was not downloaded")?;
+        update.install(bytes).map_err(|e| e.to_string())
     }
-    app.restart()
 }
