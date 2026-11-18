@@ -177,7 +177,16 @@ pub fn run() {
             let settings = settings_path
                 .as_deref()
                 .map(|path| {
-                    Settings::load_or_first_launch(path, || default_recordings_folder(&DEADLOCK))
+                    let mut settings = Settings::load_or_first_launch(path, || {
+                        default_recordings_folder(&DEADLOCK)
+                    });
+                    // Heals a folder set to the game folder's parent.
+                    if settings.use_game_subfolder(&DEADLOCK)
+                        && let Err(e) = settings.save(path)
+                    {
+                        log::warn!("could not save the settings file: {e}");
+                    }
+                    settings
                 })
                 .unwrap_or_default();
             let (request_sender, request_receiver) = mpsc::channel();

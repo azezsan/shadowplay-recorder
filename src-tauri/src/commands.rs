@@ -52,11 +52,16 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
     state.settings.read().unwrap().clone()
 }
 
-/// Clamps the settings, writes them to the settings file and hands them to
+/// Moves a parent folder down into the game's subfolder, clamps the
+/// settings, writes them to the settings file and hands them to
 /// the engine before its next step. Returns what was saved.
 #[tauri::command]
 #[specta::specta]
-pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<Settings, String> {
+pub fn save_settings(
+    state: State<'_, AppState>,
+    mut settings: Settings,
+) -> Result<Settings, String> {
+    settings.use_game_subfolder(&DEADLOCK);
     let settings = settings.save_from_window(state.settings_path.as_deref())?;
     *state.settings.write().unwrap() = settings.clone();
     Ok(settings)

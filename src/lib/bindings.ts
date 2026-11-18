@@ -25,7 +25,8 @@ export const commands = {
 	/**  The settings in use. */
 	getSettings: (options?: InvokeOptions) => __TAURI_INVOKE<Settings>("get_settings", undefined, options),
 	/**
-	 *  Clamps the settings, writes them to the settings file and hands them to
+	 *  Moves a parent folder down into the game's subfolder, clamps the
+	 *  settings, writes them to the settings file and hands them to
 	 *  the engine before its next step. Returns what was saved.
 	 */
 	saveSettings: (settings: Settings, options?: InvokeOptions) => __TAURI_INVOKE<Settings>("save_settings", { settings }, options),
