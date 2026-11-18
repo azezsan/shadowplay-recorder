@@ -9,6 +9,7 @@
   // The settings as last loaded or saved, and the form's edits of them.
   let saved = $state<Settings | null>(null);
   let folder = $state<string | null>(null);
+  let consoleLog = $state<string | null>(null);
   let maxSizeGb = $state<number | null>(null);
   let stopDelaySeconds = $state<number | null>(null);
   let focusOnMatchStart = $state(true);
@@ -23,6 +24,7 @@
   function show(settings: Settings) {
     saved = settings;
     folder = settings.recordingsFolder ?? null;
+    consoleLog = settings.consoleLog ?? null;
     maxSizeGb = settings.maxSizeGb ?? null;
     stopDelaySeconds = settings.stopDelaySeconds ?? null;
     focusOnMatchStart = settings.focusOnMatchStart ?? true;
@@ -31,6 +33,7 @@
   const dirty = $derived(
     saved !== null &&
       (folder !== (saved.recordingsFolder ?? null) ||
+        consoleLog !== (saved.consoleLog ?? null) ||
         maxSizeGb !== (saved.maxSizeGb ?? null) ||
         stopDelaySeconds !== (saved.stopDelaySeconds ?? null) ||
         focusOnMatchStart !== (saved.focusOnMatchStart ?? true)),
@@ -70,6 +73,19 @@
     }
   }
 
+  async function chooseConsoleLog() {
+    const picked = await commands.pickConsoleLog(consoleLog);
+    if (picked !== null) {
+      consoleLog = picked;
+      message = null;
+    }
+  }
+
+  function clearConsoleLog() {
+    consoleLog = null;
+    message = null;
+  }
+
   async function save(event: SubmitEvent) {
     event.preventDefault();
     if (!saved) return;
@@ -81,6 +97,7 @@
         await commands.saveSettings({
           ...saved,
           recordingsFolder: folder,
+          consoleLog,
           maxSizeGb: Math.max(0, maxSizeGb ?? 0),
           stopDelaySeconds: Math.max(0, Math.round(stopDelaySeconds ?? 0)),
           focusOnMatchStart,
@@ -123,6 +140,35 @@
               onclick={chooseFolder}>Choose…</Button
             >
           </div>
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <Label for="choose-console-log">Console log</Label>
+          <div class="flex items-center gap-2">
+            <p
+              id="console-log"
+              class={[
+                "min-w-0 flex-1 truncate text-sm",
+                consoleLog ? "font-mono" : "text-muted-foreground",
+              ]}
+              title={consoleLog ?? undefined}
+            >
+              {consoleLog ?? "Found through Steam."}
+            </p>
+            {#if consoleLog}
+              <Button type="button" variant="ghost" onclick={clearConsoleLog}>Clear</Button>
+            {/if}
+            <Button
+              id="choose-console-log"
+              type="button"
+              variant="outline"
+              aria-describedby="console-log console-log-hint"
+              onclick={chooseConsoleLog}>Choose…</Button
+            >
+          </div>
+          <p id="console-log-hint" class="text-muted-foreground text-sm">
+            Only needed when Deadlock is not found through Steam.
+          </p>
         </div>
 
         <div class="grid grid-cols-2 gap-4">

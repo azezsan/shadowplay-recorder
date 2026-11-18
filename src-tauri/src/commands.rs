@@ -87,6 +87,26 @@ pub async fn pick_recordings_folder(app: AppHandle, current: Option<String>) -> 
     Some(folder.to_string_lossy().into_owned())
 }
 
+/// Asks for the console log file with the native file picker, starting next
+/// to the current one. `None` when the picker was cancelled.
+#[tauri::command]
+#[specta::specta]
+pub async fn pick_console_log(app: AppHandle, current: Option<String>) -> Option<String> {
+    let mut picker = app
+        .dialog()
+        .file()
+        .set_title("Choose Deadlock's console log")
+        .add_filter("Console log", &["log", "txt"]);
+    if let Some(folder) = current.as_deref().and_then(|f| Path::new(f).parent())
+        && folder.is_dir()
+    {
+        picker = picker.set_directory(folder);
+    }
+    // Blocking is fine here: async commands run off the main thread.
+    let file = picker.blocking_pick_file()?.into_path().ok()?;
+    Some(file.to_string_lossy().into_owned())
+}
+
 /// The version of the running app, shown in the window.
 #[tauri::command]
 #[specta::specta]

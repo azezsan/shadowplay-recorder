@@ -69,6 +69,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_settings,
             commands::save_settings,
             commands::pick_recordings_folder,
+            commands::pick_console_log,
             commands::get_version,
             commands::repair_overlay,
             commands::test_recording,
