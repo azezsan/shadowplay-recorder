@@ -32,4 +32,5 @@ serde = { version = "1", features = ["derive"] }
 specta = "=2.0.0-rc.28"
 specta-typescript = "=0.0.15"
 tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
 tauri-specta = { version = "=2.0.0-rc.29", features = ["derive", "typescript"] }

@@ -132,6 +132,12 @@ fn folder_state(settings: &Settings) -> FolderState {
 /// ShadowPlay's usual folder for the game, if it exists.
 pub fn default_recordings_folder(game: &GameProfile) -> Option<PathBuf> {
     let videos = Path::new(&std::env::var_os("USERPROFILE")?).join("Videos");
+    usual_recordings_folder(&videos, game)
+}
+
+/// The first of ShadowPlay's usual folders for the game under `videos` that
+/// exists.
+fn usual_recordings_folder(videos: &Path, game: &GameProfile) -> Option<PathBuf> {
     [
         videos.join("NVIDIA").join(game.name),
         videos.join(game.name),
@@ -146,6 +152,26 @@ mod tests {
 
     use super::*;
     use crate::game::DEADLOCK;
+
+    #[test]
+    fn finds_shadowplays_usual_folder_for_the_game() {
+        let videos = tempfile::tempdir().unwrap();
+        assert_eq!(usual_recordings_folder(videos.path(), &DEADLOCK), None);
+
+        let plain = videos.path().join("Deadlock");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(
+            usual_recordings_folder(videos.path(), &DEADLOCK),
+            Some(plain)
+        );
+
+        let nvidia = videos.path().join("NVIDIA").join("Deadlock");
+        fs::create_dir_all(&nvidia).unwrap();
+        assert_eq!(
+            usual_recordings_folder(videos.path(), &DEADLOCK),
+            Some(nvidia)
+        );
+    }
 
     #[test]
     fn folder_state_follows_the_setting() {

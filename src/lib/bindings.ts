@@ -16,6 +16,18 @@ export const commands = {
 	 *  as `ActivityAdded` events.
 	 */
 	getRecentActivity: (options?: InvokeOptions) => __TAURI_INVOKE<ActivityEntry[]>("get_recent_activity", undefined, options),
+	/**  The settings in use. */
+	getSettings: (options?: InvokeOptions) => __TAURI_INVOKE<Settings>("get_settings", undefined, options),
+	/**
+	 *  Clamps the settings, writes them to the settings file and hands them to
+	 *  the engine before its next step. Returns what was saved.
+	 */
+	saveSettings: (settings: Settings, options?: InvokeOptions) => __TAURI_INVOKE<Settings>("save_settings", { settings }, options),
+	/**
+	 *  Asks for a recordings folder with the native folder picker, starting at
+	 *  the current one. `None` when the picker was cancelled.
+	 */
+	pickRecordingsFolder: (current: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string | null>("pick_recordings_folder", { current }, options),
 };
 
 /** Events */
@@ -54,6 +66,21 @@ export type Phase =
 "recording" | 
 /**  The match ended and the recording is kept running for the stop delay. */
 "finishing";
+
+export type Settings = {
+	/**  Where ShadowPlay saves recordings. Nothing is recorded while unset. */
+	recordingsFolder?: string | null,
+	/**  Size cap for the recordings folder, in GB. */
+	maxSizeGb?: number | null,
+	/**  How long to keep recording after a match ends. */
+	stopDelaySeconds?: number,
+	focusOnMatchStart?: boolean,
+	/**
+	 *  Console log location, set only when it could not be found through
+	 *  Steam.
+	 */
+	consoleLog?: string | null,
+};
 
 /**  What the app is doing right now, for the status line and the tray. */
 export type Status = {

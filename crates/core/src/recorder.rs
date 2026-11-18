@@ -82,6 +82,10 @@ impl<C: RecordChannel> ShadowPlayRecorder<C> {
         &self.channel
     }
 
+    pub fn channel_mut(&mut self) -> &mut C {
+        &mut self.channel
+    }
+
     /// True if the command was accepted or sent without a reply.
     fn send(&mut self, command: RecordCommand) -> bool {
         match self.channel.send(command) {
