@@ -16,6 +16,11 @@ fn main() -> ExitCode {
             _ => ExitCode::FAILURE,
         };
     }
+    #[cfg(debug_assertions)]
+    if std::env::args().any(|arg| arg == shadowplay_recorder_lib::EXPORT_BINDINGS_FLAG) {
+        shadowplay_recorder_lib::export_bindings();
+        return ExitCode::SUCCESS;
+    }
     shadowplay_recorder_lib::run();
     ExitCode::SUCCESS
 }

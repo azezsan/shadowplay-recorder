@@ -7,11 +7,12 @@ import process from "node:process";
 const onWindows = process.platform === "win32";
 
 const steps: [name: string, command: string][] = [
-  // Generators first: the UI bundle is embedded by the Rust build, and the
-  // Rust tests regenerate the TypeScript bindings.
+  // Generators first: the UI bundle is embedded by the Rust build, and a
+  // debug build of the app regenerates the TypeScript bindings.
   ["build the UI", "pnpm ui:build"],
-  ["Rust tests (regenerates the bindings)", "cargo test --workspace"],
+  ["generate the bindings", "cargo run -p shadowplay-recorder -- --export-bindings"],
   ["bindings are up to date", "git diff --exit-code -- src/lib/bindings.ts"],
+  ["Rust tests", "cargo test --workspace"],
   ["Prettier", "pnpm exec prettier --check ."],
   ["ESLint", "pnpm exec eslint ."],
   ["svelte-check", "pnpm exec svelte-check --tsgo --tsconfig ./tsconfig.json"],

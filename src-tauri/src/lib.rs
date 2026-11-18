@@ -3,8 +3,11 @@
 //! commands and events to the UI.
 //!
 //! The UI never calls `invoke` by name. `specta_builder` is the single list of
-//! commands and events, and `src/lib/bindings.ts` is generated from it by the
-//! `export_bindings` test.
+//! commands and events, and `src/lib/bindings.ts` is generated from it by
+//! running a debug build with `--export-bindings`.
+//!
+//! This crate has no tests: on Windows a test binary lacks the app manifest
+//! and cannot load. Anything worth testing belongs in `recorder-core`.
 
 mod activity;
 mod commands;
@@ -43,6 +46,19 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_recent_activity
         ])
         .events(collect_events![StatusChanged, activity::ActivityAdded])
+}
+
+/// Makes a debug build write the TypeScript bindings and exit. See `main`.
+pub const EXPORT_BINDINGS_FLAG: &str = "--export-bindings";
+
+/// Regenerates `src/lib/bindings.ts`. `pnpm check` runs this and fails if the
+/// committed file changed.
+#[cfg(debug_assertions)]
+pub fn export_bindings() {
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../src/lib/bindings.ts");
+    specta_builder()
+        .export(specta_typescript::Typescript::default(), path)
+        .expect("failed to export the TypeScript bindings");
 }
 
 /// Steps the engine once a second for the life of the app.
@@ -103,18 +119,4 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("failed to start the app");
-}
-
-#[cfg(test)]
-mod tests {
-    use specta_typescript::Typescript;
-
-    /// Regenerates the TypeScript bindings. `pnpm check` runs this and fails
-    /// if the committed file changed.
-    #[test]
-    fn export_bindings() {
-        super::specta_builder()
-            .export(Typescript::default(), "../src/lib/bindings.ts")
-            .expect("failed to export the TypeScript bindings");
-    }
 }

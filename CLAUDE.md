@@ -36,6 +36,7 @@ Nothing is hosted. The repo is `azezsan/shadowplay-recorder` on GitHub, owned by
 
 - The app only works on Windows with an NVIDIA GPU, and agents work on macOS. Code that calls Windows goes in `recorder-core`'s `platform` module and nowhere else. Everything else must build and be tested on macOS.
 - On macOS `pnpm check` also lints `recorder-core` for the Windows target. The shell crate cannot be cross-checked, so keep Windows-only code out of it.
+- The shell crate has no tests, because its test binary cannot load on Windows. Put logic in `recorder-core`.
 - Behaviour is tested through the engine step with fakes, not through the UI. Recording a real match is verified by the owner by hand.
 - After changing a command, an event or a type that crosses to the UI, run `pnpm check` and commit the regenerated `src/lib/bindings.ts`.
 - Timings, NVIDIA command names and the recordable-map list are constants, not settings.
