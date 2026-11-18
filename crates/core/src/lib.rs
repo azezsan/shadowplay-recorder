@@ -19,4 +19,5 @@ pub mod setup;
 pub mod steam;
 pub mod tail;
 pub mod test_recording;
+pub mod tray;
 pub mod update;

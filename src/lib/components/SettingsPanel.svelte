@@ -13,6 +13,10 @@
   let stopDelaySeconds = $state<number | null>(null);
   let focusOnMatchStart = $state(true);
 
+  // Held by the OS, not the settings file, and applied as soon as it is
+  // flipped. `null` until the OS has answered.
+  let startWithWindows = $state<boolean | null>(null);
+
   let saving = $state(false);
   let message = $state<{ text: string; error: boolean } | null>(null);
 
@@ -37,6 +41,26 @@
       message = { text: `Could not load the settings: ${String(e)}`, error: true };
     });
   });
+
+  $effect(() => {
+    commands.getStartWithWindows().then(
+      (enabled) => (startWithWindows = enabled),
+      (e: unknown) => {
+        message = { text: String(e), error: true };
+      },
+    );
+  });
+
+  async function changeStartWithWindows(enabled: boolean) {
+    message = null;
+    try {
+      startWithWindows = await commands.setStartWithWindows(enabled);
+    } catch (e) {
+      message = { text: String(e), error: true };
+      // Show what the OS really has, not what was asked for.
+      startWithWindows = await commands.getStartWithWindows().catch(() => null);
+    }
+  }
 
   async function chooseFolder() {
     const picked = await commands.pickRecordingsFolder(folder);
@@ -125,6 +149,22 @@
             id="focus-on-start"
             bind:checked={focusOnMatchStart}
             onCheckedChange={() => (message = null)}
+          />
+        </div>
+
+        <div class="flex items-center justify-between gap-4">
+          <div class="flex flex-col gap-1">
+            <Label for="start-with-windows">Start with Windows</Label>
+            <p id="start-with-windows-hint" class="text-muted-foreground text-sm">
+              Opens in the tray at login, with no window. Applies right away.
+            </p>
+          </div>
+          <Switch
+            id="start-with-windows"
+            aria-describedby="start-with-windows-hint"
+            checked={startWithWindows ?? false}
+            disabled={startWithWindows === null}
+            onCheckedChange={changeStartWithWindows}
           />
         </div>
 

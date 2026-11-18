@@ -48,6 +48,16 @@ export const commands = {
 	 *  The engine thread runs it between steps and refuses it during a match.
 	 */
 	testRecording: (options?: InvokeOptions) => __TAURI_INVOKE<string>("test_recording", undefined, options),
+	/**
+	 *  Whether the app launches at login. The OS holds this, not the settings
+	 *  file, so the answer is always the real state.
+	 */
+	getStartWithWindows: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("get_start_with_windows", undefined, options),
+	/**
+	 *  Registers or removes the login launch, which starts the app in the tray
+	 *  with no window. Returns the state the OS reports afterwards.
+	 */
+	setStartWithWindows: (enabled: boolean, options?: InvokeOptions) => __TAURI_INVOKE<boolean>("set_start_with_windows", { enabled }, options),
 };
 
 /** Events */

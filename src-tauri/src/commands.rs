@@ -11,6 +11,7 @@ use recorder_core::setup::{self, SetupReport};
 use recorder_core::test_recording::TestRecordingError;
 use recorder_core::{overlay_setup, platform};
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::activity::{self, ActivityEntry};
@@ -133,4 +134,33 @@ pub async fn test_recording(app: AppHandle) -> Result<String, TestRecordingError
         .await
         .expect("the test recording panicked")
         .expect("the engine thread has stopped")
+}
+
+/// Whether the app launches at login. The OS holds this, not the settings
+/// file, so the answer is always the real state.
+#[tauri::command]
+#[specta::specta]
+pub fn get_start_with_windows(app: AppHandle) -> Result<bool, String> {
+    app.autolaunch()
+        .is_enabled()
+        .map_err(|e| format!("could not read the startup entry: {e}"))
+}
+
+/// Registers or removes the login launch, which starts the app in the tray
+/// with no window. Returns the state the OS reports afterwards.
+#[tauri::command]
+#[specta::specta]
+pub fn set_start_with_windows(app: AppHandle, enabled: bool) -> Result<bool, String> {
+    let autolaunch = app.autolaunch();
+    let changed = if enabled {
+        autolaunch.enable()
+    } else {
+        autolaunch.disable()
+    };
+    changed.map_err(|e| format!("could not change the startup entry: {e}"))?;
+    log::info!(
+        "start with Windows {}",
+        if enabled { "turned on" } else { "turned off" }
+    );
+    get_start_with_windows(app)
 }
