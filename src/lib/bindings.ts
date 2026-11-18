@@ -16,6 +16,53 @@ export const commands = {
 	 *  as `ActivityAdded` events.
 	 */
 	getRecentActivity: (options?: InvokeOptions) => __TAURI_INVOKE<ActivityEntry[]>("get_recent_activity", undefined, options),
+	/**
+	 *  The setup checklist, checked now. It probes the debug port and reads
+	 *  Steam's files, so it runs off the main thread; the window calls it on a
+	 *  timer while it is visible.
+	 */
+	getSetupReport: (options?: InvokeOptions) => __TAURI_INVOKE<SetupReport>("get_setup_report", undefined, options),
+	/**  The settings in use. */
+	getSettings: (options?: InvokeOptions) => __TAURI_INVOKE<Settings>("get_settings", undefined, options),
+	/**
+	 *  Clamps the settings, writes them to the settings file and hands them to
+	 *  the engine before its next step. Returns what was saved.
+	 */
+	saveSettings: (settings: Settings, options?: InvokeOptions) => __TAURI_INVOKE<Settings>("save_settings", { settings }, options),
+	/**
+	 *  Asks for a recordings folder with the native folder picker, starting at
+	 *  the current one. `None` when the picker was cancelled.
+	 */
+	pickRecordingsFolder: (current: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string | null>("pick_recordings_folder", { current }, options),
+	/**
+	 *  Asks for the console log file with the native file picker, starting next
+	 *  to the current one. `None` when the picker was cancelled.
+	 */
+	pickConsoleLog: (current: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string | null>("pick_console_log", { current }, options),
+	/**  The version of the running app, shown in the window. */
+	getVersion: (options?: InvokeOptions) => __TAURI_INVOKE<string>("get_version", undefined, options),
+	/**
+	 *  Adds the debug switch to the NVIDIA overlay config: the app relaunches
+	 *  itself with administrator rights and `--patch-overlay`, behind one
+	 *  Windows prompt. The error is a sentence for the user.
+	 */
+	repairOverlay: (options?: InvokeOptions) => __TAURI_INVOKE<null>("repair_overlay", undefined, options),
+	/**
+	 *  Records a few seconds to prove the overlay, the record command and the
+	 *  recordings folder work together, and returns the recorded file's path.
+	 *  The engine thread runs it between steps and refuses it during a match.
+	 */
+	testRecording: (options?: InvokeOptions) => __TAURI_INVOKE<string>("test_recording", undefined, options),
+	/**
+	 *  Whether the app launches at login. The OS holds this, not the settings
+	 *  file, so the answer is always the real state.
+	 */
+	getStartWithWindows: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("get_start_with_windows", undefined, options),
+	/**
+	 *  Registers or removes the login launch, which starts the app in the tray
+	 *  with no window. Returns the state the OS reports afterwards.
+	 */
+	setStartWithWindows: (enabled: boolean, options?: InvokeOptions) => __TAURI_INVOKE<boolean>("set_start_with_windows", { enabled }, options),
 };
 
 /** Events */
@@ -23,6 +70,9 @@ export const events = {
 	activityAdded: makeEvent<ActivityAdded, ActivityAdded>("activity-added"),
 	statusChanged: makeEvent<StatusChanged, StatusChanged>("status-changed"),
 };
+
+/* Constants */
+export const ACTIVITY_KEPT_IN_MEMORY = 200 as const;
 
 /* Types */
 /**  Emitted for every new entry. */
@@ -35,7 +85,33 @@ export type ActivityEntry = {
 	message: string,
 };
 
+export type ConsoleLogState = "ready" | 
+/**  The game was not found in any Steam library. */
+"gameNotFound" | 
+/**  The game's launch options lack the console-log option. */
+"optionMissing";
+
+export type FolderState = "ready" | "notSet" | 
+/**  A folder is set but does not exist. */
+"missing";
+
 export type Level = "info" | "warning" | "error";
+
+export type OverlayState = "ready" | 
+/**  The NVIDIA App's overlay config file was not found. */
+"nvidiaAppMissing" | 
+/**
+ *  The debug-port switch is not in the overlay config. Fixable by the
+ *  app, with an administrator prompt.
+ */
+"switchMissing" | 
+/**
+ *  The switch is there but nothing listens: the NVIDIA App needs a full
+ *  restart, or is not running.
+ */
+"notReachable" | 
+/**  The port answers but the overlay page is not loaded yet. */
+"noRecordPage";
 
 /**  What the session is doing, for display. */
 export type Phase = 
@@ -55,14 +131,62 @@ export type Phase =
 /**  The match ended and the recording is kept running for the stop delay. */
 "finishing";
 
+export type Settings = {
+	/**  Where ShadowPlay saves recordings. Nothing is recorded while unset. */
+	recordingsFolder?: string | null,
+	/**  Size cap for the recordings folder, in GB. */
+	maxSizeGb?: number | null,
+	/**  How long to keep recording after a match ends. */
+	stopDelaySeconds?: number,
+	focusOnMatchStart?: boolean,
+	/**
+	 *  Console log location, set only when it could not be found through
+	 *  Steam.
+	 */
+	consoleLog?: string | null,
+};
+
+export type SetupReport = {
+	overlay: OverlayState,
+	consoleLog: ConsoleLogState,
+	recordingsFolder: FolderState,
+};
+
 /**  What the app is doing right now, for the status line and the tray. */
 export type Status = {
 	phase: Phase,
 	matchId: string | null,
+	/**  The phase in words, for the window's status line and the tray. */
+	label: string,
+	/**  A test recording is running. The phase stays what it was meanwhile. */
+	testRecordingRunning: boolean,
+	/**  A test recording may be started now. */
+	testRecordingAllowed: boolean,
 };
 
 /**  Emitted whenever the status changes. */
 export type StatusChanged = Status;
+
+/**  Why a test recording failed or was refused. */
+export type TestRecordingError = 
+/**
+ *  The recorder is in a match or recording one; the test would get in
+ *  its way.
+ */
+{ kind: "busy"; phase: Phase } | 
+/**  No recordings folder is set, so the result could not be checked. */
+{ kind: "noRecordingsFolder" } | 
+/**  The overlay's debug port could not be reached; nothing was sent. */
+{ kind: "overlayUnreachable"; detail: string } | 
+/**  The overlay answered and refused the start command. */
+{ kind: "startRejected"; detail: string } | 
+/**
+ *  The start was sent but no file appeared in the recordings folder,
+ *  which usually means ShadowPlay saves somewhere else.
+ */
+{ kind: "noRecordingAppeared"; folder: string } | 
+/**  A recording started but the stop failed, so it may still be running. */
+{ kind: "stopFailed"; recording: string; detail: string };
 
 /* Tauri Specta runtime */
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;

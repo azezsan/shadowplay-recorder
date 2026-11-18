@@ -336,6 +336,13 @@ impl<R: Recorder, W: GameWindow> Session<R, W> {
         }
     }
 
+    /// Ends whatever is in progress right away, as the app quits: stops
+    /// retrying the start, and saves a recording now instead of waiting out
+    /// the rest of the stop delay or the match.
+    pub fn end_now(&mut self) {
+        self.game_exit();
+    }
+
     fn game_exit(&mut self) {
         // The game is gone: stop retrying, and save now instead of waiting
         // out the rest of the stop delay.

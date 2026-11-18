@@ -77,13 +77,27 @@ pub fn overlay_switch_missing() -> bool {
 }
 
 fn overlay_state() -> OverlayState {
+    let probe = Overlay::default().probe();
+    if !matches!(probe, Probe::Unreachable(_)) {
+        return overlay_state_from(probe, None);
+    }
+    let config = overlay_setup::config_path().map(|path| {
+        // An unreadable file cannot be shown to carry the switch.
+        std::fs::read_to_string(path).unwrap_or_default()
+    });
+    overlay_state_from(probe, config.as_deref())
+}
+
+/// The overlay state from a probe of the debug port and the text of the
+/// overlay config, `None` when the NVIDIA App is not installed.
+fn overlay_state_from(probe: Probe, config: Option<&str>) -> OverlayState {
     // A reachable port is proof enough, whatever the file says.
-    match Overlay::default().probe() {
+    match probe {
         Probe::Ready => OverlayState::Ready,
         Probe::NoRecordPage => OverlayState::NoRecordPage,
-        Probe::Unreachable(_) => match overlay_setup::config_path() {
+        Probe::Unreachable(_) => match config {
             None => OverlayState::NvidiaAppMissing,
-            Some(_) if overlay_switch_missing() => OverlayState::SwitchMissing,
+            Some(text) if !overlay_setup::has_debug_switch(text) => OverlayState::SwitchMissing,
             Some(_) => OverlayState::NotReachable,
         },
     }
@@ -132,6 +146,12 @@ fn folder_state(settings: &Settings) -> FolderState {
 /// ShadowPlay's usual folder for the game, if it exists.
 pub fn default_recordings_folder(game: &GameProfile) -> Option<PathBuf> {
     let videos = Path::new(&std::env::var_os("USERPROFILE")?).join("Videos");
+    usual_recordings_folder(&videos, game)
+}
+
+/// The first of ShadowPlay's usual folders for the game under `videos` that
+/// exists.
+fn usual_recordings_folder(videos: &Path, game: &GameProfile) -> Option<PathBuf> {
     [
         videos.join("NVIDIA").join(game.name),
         videos.join(game.name),
@@ -146,6 +166,62 @@ mod tests {
 
     use super::*;
     use crate::game::DEADLOCK;
+
+    const UNPATCHED: &str = r#"{"switches":["nv-osc=true"]}"#;
+    const PATCHED: &str = r#"{"switches":["nv-remote-debugging-port=49222"]}"#;
+
+    fn unreachable() -> Probe {
+        Probe::Unreachable("connection refused".into())
+    }
+
+    #[test]
+    fn overlay_state_trusts_a_reachable_port_over_the_file() {
+        assert_eq!(
+            overlay_state_from(Probe::Ready, Some(UNPATCHED)),
+            OverlayState::Ready
+        );
+        assert_eq!(
+            overlay_state_from(Probe::NoRecordPage, None),
+            OverlayState::NoRecordPage
+        );
+    }
+
+    #[test]
+    fn overlay_state_explains_an_unreachable_port_from_the_file() {
+        assert_eq!(
+            overlay_state_from(unreachable(), None),
+            OverlayState::NvidiaAppMissing
+        );
+        assert_eq!(
+            overlay_state_from(unreachable(), Some(UNPATCHED)),
+            OverlayState::SwitchMissing
+        );
+        assert_eq!(
+            overlay_state_from(unreachable(), Some(PATCHED)),
+            OverlayState::NotReachable,
+            "the switch is in place, so the NVIDIA App needs a restart"
+        );
+    }
+
+    #[test]
+    fn finds_shadowplays_usual_folder_for_the_game() {
+        let videos = tempfile::tempdir().unwrap();
+        assert_eq!(usual_recordings_folder(videos.path(), &DEADLOCK), None);
+
+        let plain = videos.path().join("Deadlock");
+        fs::create_dir_all(&plain).unwrap();
+        assert_eq!(
+            usual_recordings_folder(videos.path(), &DEADLOCK),
+            Some(plain)
+        );
+
+        let nvidia = videos.path().join("NVIDIA").join("Deadlock");
+        fs::create_dir_all(&nvidia).unwrap();
+        assert_eq!(
+            usual_recordings_folder(videos.path(), &DEADLOCK),
+            Some(nvidia)
+        );
+    }
 
     #[test]
     fn folder_state_follows_the_setting() {
