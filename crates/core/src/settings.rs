@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::game::GameProfile;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, specta::Type)]
 #[serde(rename_all = "camelCase", default)]
 pub struct Settings {
@@ -51,6 +53,28 @@ impl Settings {
             self.console_log = None;
         }
         self
+    }
+
+    /// ShadowPlay saves each game's recordings in a subfolder named after
+    /// the game, so a recordings folder that holds one (such as
+    /// `Videos\NVIDIA` instead of `Videos\NVIDIA\Deadlock`) is moved down
+    /// into it. The app only looks at the folder itself, so the parent would
+    /// never show a recording. Returns whether the folder changed.
+    pub fn use_game_subfolder(&mut self, game: &GameProfile) -> bool {
+        let Some(folder) = &self.recordings_folder else {
+            return false;
+        };
+        let subfolder = Path::new(folder).join(game.name);
+        if !subfolder.is_dir() {
+            return false;
+        }
+        let subfolder = subfolder.to_string_lossy().into_owned();
+        log::info!(
+            "recordings folder {folder} holds a {} folder; using {subfolder}",
+            game.name
+        );
+        self.recordings_folder = Some(subfolder);
+        true
     }
 
     /// Reads the file, falling back to defaults when it is missing or broken.
@@ -110,6 +134,7 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::game::DEADLOCK;
 
     #[test]
     fn round_trips_and_tolerates_missing_or_partial_files() {
@@ -176,6 +201,27 @@ mod tests {
             Settings::default().save_from_window(None),
             Err("the app has no folder to keep its settings in".to_string())
         );
+    }
+
+    #[test]
+    fn a_folder_holding_the_game_subfolder_moves_down_into_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let nvidia = dir.path().join("NVIDIA");
+        let deadlock = nvidia.join("Deadlock");
+        fs::create_dir_all(&deadlock).unwrap();
+        let folder = |path: &Path| Some(path.to_string_lossy().into_owned());
+
+        let mut settings = Settings {
+            recordings_folder: folder(&nvidia),
+            ..Settings::default()
+        };
+        assert!(settings.use_game_subfolder(&DEADLOCK));
+        assert_eq!(settings.recordings_folder, folder(&deadlock));
+
+        // Already the game's folder, or no folder: nothing changes.
+        assert!(!settings.use_game_subfolder(&DEADLOCK));
+        assert_eq!(settings.recordings_folder, folder(&deadlock));
+        assert!(!Settings::default().use_game_subfolder(&DEADLOCK));
     }
 
     #[test]
