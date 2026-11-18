@@ -10,11 +10,8 @@ fn main() -> ExitCode {
     // The app relaunches itself with administrator rights and this flag to
     // edit the NVIDIA overlay config, which a normal process cannot write.
     if std::env::args().any(|arg| arg == PATCH_OVERLAY_FLAG) {
-        let patched = overlay_setup::config_path().map(|path| overlay_setup::patch_file(&path));
-        return match patched {
-            Some(Ok(_)) => ExitCode::SUCCESS,
-            _ => ExitCode::FAILURE,
-        };
+        let config = overlay_setup::config_path();
+        return ExitCode::from(overlay_setup::patch_and_exit_code(config.as_deref()));
     }
     #[cfg(debug_assertions)]
     if std::env::args().any(|arg| arg == shadowplay_recorder_lib::EXPORT_BINDINGS_FLAG) {

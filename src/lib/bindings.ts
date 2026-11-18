@@ -34,6 +34,12 @@ export const commands = {
 	 *  the current one. `None` when the picker was cancelled.
 	 */
 	pickRecordingsFolder: (current: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string | null>("pick_recordings_folder", { current }, options),
+	/**
+	 *  Adds the debug switch to the NVIDIA overlay config: the app relaunches
+	 *  itself with administrator rights and `--patch-overlay`, behind one
+	 *  Windows prompt. The error is a sentence for the user.
+	 */
+	repairOverlay: (options?: InvokeOptions) => __TAURI_INVOKE<null>("repair_overlay", undefined, options),
 };
 
 /** Events */

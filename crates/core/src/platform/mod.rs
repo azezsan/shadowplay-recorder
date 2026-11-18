@@ -27,9 +27,17 @@ pub fn steam_root() -> Option<PathBuf> {
     imp::steam_root()
 }
 
+/// Why a program could not be run with administrator rights.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ElevationError {
+    /// The user said no to the Windows consent prompt.
+    Declined,
+    Failed(String),
+}
+
 /// Runs a program with administrator rights, showing the Windows consent
 /// prompt, and waits for it. Returns its exit code.
-pub fn run_elevated(program: &Path, arguments: &str) -> Result<u32, String> {
+pub fn run_elevated(program: &Path, arguments: &str) -> Result<u32, ElevationError> {
     imp::run_elevated(program, arguments)
 }
 

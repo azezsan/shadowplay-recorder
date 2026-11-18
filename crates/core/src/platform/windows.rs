@@ -18,6 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, PCWSTR, w};
 
+use super::ElevationError;
+
 fn wide(text: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
     text.as_ref().encode_wide().chain(Some(0)).collect()
 }
@@ -80,7 +82,7 @@ pub fn steam_root() -> Option<PathBuf> {
     path.is_dir().then_some(path)
 }
 
-pub fn run_elevated(program: &Path, arguments: &str) -> Result<u32, String> {
+pub fn run_elevated(program: &Path, arguments: &str) -> Result<u32, ElevationError> {
     let file = wide(program);
     let parameters = wide(arguments);
     let mut info = SHELLEXECUTEINFOW {
@@ -97,19 +99,23 @@ pub fn run_elevated(program: &Path, arguments: &str) -> Result<u32, String> {
     unsafe {
         ShellExecuteExW(&mut info).map_err(|e| {
             if e.code() == ERROR_CANCELLED.to_hresult() {
-                "the administrator prompt was declined".to_string()
+                ElevationError::Declined
             } else {
-                e.message()
+                ElevationError::Failed(e.message())
             }
         })?;
         if info.hProcess.is_invalid() {
-            return Err("the elevated process did not start".into());
+            return Err(ElevationError::Failed(
+                "the elevated process did not start".into(),
+            ));
         }
         WaitForSingleObject(info.hProcess, INFINITE);
         let mut code = 0u32;
         let result = GetExitCodeProcess(info.hProcess, &mut code);
         let _ = CloseHandle(info.hProcess);
-        result.map(|()| code).map_err(|e| e.message())
+        result
+            .map(|()| code)
+            .map_err(|e| ElevationError::Failed(e.message()))
     }
 }
 

@@ -23,7 +23,7 @@ use recorder_core::overlay::Overlay;
 use recorder_core::platform::ProcessWindow;
 use recorder_core::session::Phase;
 use recorder_core::settings::Settings;
-use recorder_core::setup::default_recordings_folder;
+use recorder_core::setup::{self, default_recordings_folder};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_specta::{Builder, Event, collect_commands, collect_events};
@@ -52,7 +52,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_setup_report,
             commands::get_settings,
             commands::save_settings,
-            commands::pick_recordings_folder
+            commands::pick_recordings_folder,
+            commands::repair_overlay
         ])
         .events(collect_events![StatusChanged, activity::ActivityAdded])
 }
@@ -95,6 +96,20 @@ fn run_engine(app: AppHandle) {
     }
 }
 
+/// Opens the window if an NVIDIA App update removed the debug switch, even
+/// when the app started minimized, so the user can fix it before a match.
+fn show_window_if_switch_missing(app: &AppHandle) {
+    if !setup::overlay_switch_missing() {
+        return;
+    }
+    log::warn!("the overlay's debug switch is missing; an NVIDIA App update may have removed it");
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+}
+
 pub fn run() {
     let activity = activity::install();
     let builder = specta_builder();
@@ -129,6 +144,8 @@ pub fn run() {
                     match_id: None,
                 }),
             });
+
+            show_window_if_switch_missing(app.handle());
 
             let handle = app.handle().clone();
             thread::spawn(move || run_engine(handle));

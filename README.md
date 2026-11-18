@@ -13,6 +13,10 @@ It needs Windows, an NVIDIA GPU with the NVIDIA App, and Deadlock on Steam.
 - It treats a recording as started only once the video file appears, and re-sends the start command until it does.
 - It never sends a stop unless a recording exists, so it cannot start one by accident in the lobby.
 
+## Security note
+
+The app reaches the overlay through its debug port, which it opens by adding one line to the NVIDIA App's overlay config (the setup checklist's Fix button, behind one administrator prompt; the original is kept as `NVIDIA Overlay.json.bak`). The debug port listens only on loopback and has no authentication: any program running on the same PC can use it to run code in the overlay page. Other machines cannot reach it. This is accepted for a personal gaming PC.
+
 ## Development
 
 ```sh
