@@ -1,6 +1,7 @@
 //! The desktop shell around `recorder-core`: it runs the engine on a
 //! background thread, keeps the latest status for the window, and exposes
-//! commands and events to the UI.
+//! commands and events to the UI. It lives in the tray (`tray`), runs one
+//! copy at a time, and can start at login.
 //!
 //! The UI never calls `invoke` by name. `specta_builder` is the single list of
 //! commands and events, and `src/lib/bindings.ts` is generated from it by
@@ -11,6 +12,7 @@
 
 mod activity;
 mod commands;
+mod tray;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, RwLock};
@@ -24,6 +26,7 @@ use recorder_core::platform::ProcessWindow;
 use recorder_core::session::Phase;
 use recorder_core::settings::Settings;
 use recorder_core::setup::default_recordings_folder;
+use recorder_core::tray::{LAUNCHED_AT_LOGIN_FLAG, starts_hidden};
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_specta::{Builder, Event, collect_commands, collect_events};
@@ -52,7 +55,9 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_setup_report,
             commands::get_settings,
             commands::save_settings,
-            commands::pick_recordings_folder
+            commands::pick_recordings_folder,
+            commands::get_start_with_windows,
+            commands::set_start_with_windows
         ])
         .events(collect_events![StatusChanged, activity::ActivityAdded])
 }
@@ -89,6 +94,7 @@ fn run_engine(app: AppHandle) {
             changed
         };
         if changed {
+            tray::show_status(&app, &status);
             let _ = StatusChanged(status).emit(&app);
         }
         thread::sleep(STEP_INTERVAL);
@@ -100,8 +106,19 @@ pub fn run() {
     let builder = specta_builder();
 
     tauri::Builder::default()
+        // First, so a second launch hands over before anything else starts.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            tray::show_window(app);
+        }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .arg(LAUNCHED_AT_LOGIN_FLAG)
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
         .invoke_handler(builder.invoke_handler())
+        .on_window_event(tray::on_window_event)
         .setup(move |app| {
             builder.mount_events(app);
             if let Ok(folder) = app.path().app_log_dir() {
@@ -121,14 +138,21 @@ pub fn run() {
                     Settings::load_or_first_launch(path, || default_recordings_folder(&DEADLOCK))
                 })
                 .unwrap_or_default();
+            let status = Status {
+                phase: Phase::Idle,
+                match_id: None,
+            };
+            tray::install(app.handle(), &status)?;
             app.manage(AppState {
                 settings: RwLock::new(settings),
                 settings_path,
-                status: Mutex::new(Status {
-                    phase: Phase::Idle,
-                    match_id: None,
-                }),
+                status: Mutex::new(status),
             });
+            // The window starts hidden (`visible: false`), so a launch at
+            // login shows nothing but the tray icon.
+            if !starts_hidden(std::env::args()) {
+                tray::show_window(app.handle());
+            }
 
             let handle = app.handle().clone();
             thread::spawn(move || run_engine(handle));

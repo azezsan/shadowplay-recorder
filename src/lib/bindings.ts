@@ -34,6 +34,16 @@ export const commands = {
 	 *  the current one. `None` when the picker was cancelled.
 	 */
 	pickRecordingsFolder: (current: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string | null>("pick_recordings_folder", { current }, options),
+	/**
+	 *  Whether the app launches at login. The OS holds this, not the settings
+	 *  file, so the answer is always the real state.
+	 */
+	getStartWithWindows: (options?: InvokeOptions) => __TAURI_INVOKE<boolean>("get_start_with_windows", undefined, options),
+	/**
+	 *  Registers or removes the login launch, which starts the app in the tray
+	 *  with no window. Returns the state the OS reports afterwards.
+	 */
+	setStartWithWindows: (enabled: boolean, options?: InvokeOptions) => __TAURI_INVOKE<boolean>("set_start_with_windows", { enabled }, options),
 };
 
 /** Events */
