@@ -34,6 +34,8 @@ export const commands = {
 	 *  the current one. `None` when the picker was cancelled.
 	 */
 	pickRecordingsFolder: (current: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string | null>("pick_recordings_folder", { current }, options),
+	/**  The version of the running app, shown in the window. */
+	getVersion: (options?: InvokeOptions) => __TAURI_INVOKE<string>("get_version", undefined, options),
 };
 
 /** Events */

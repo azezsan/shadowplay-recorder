@@ -82,3 +82,10 @@ pub async fn pick_recordings_folder(app: AppHandle, current: Option<String>) -> 
     let folder = picker.blocking_pick_folder()?.into_path().ok()?;
     Some(folder.to_string_lossy().into_owned())
 }
+
+/// The version of the running app, shown in the window.
+#[tauri::command]
+#[specta::specta]
+pub fn get_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
