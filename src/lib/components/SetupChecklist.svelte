@@ -1,12 +1,13 @@
 <!--
   The setup checklist: the overlay, the console log and the recordings
   folder. It re-checks while the window is visible and shrinks to one line
-  once everything is ready.
+  once everything is ready. The test recording sits below the checks.
 -->
 <script lang="ts">
   import CircleCheck from "@lucide/svelte/icons/circle-check";
   import type { ConsoleLogState, FolderState, OverlayState } from "$lib/bindings";
   import SetupCheck from "$lib/components/SetupCheck.svelte";
+  import TestRecording from "$lib/components/TestRecording.svelte";
   import * as Card from "$lib/components/ui/card";
   import { setup, watchSetup } from "$lib/setup.svelte";
 
@@ -100,5 +101,12 @@
         />
       </ul>
     </Card.Content>
+  {/if}
+  {#if report !== null}
+    <!-- One instance for both layouts, so a test survives the checklist
+         collapsing or expanding while it runs. -->
+    <Card.Footer>
+      <TestRecording folderSet={report.recordingsFolder === "ready"} />
+    </Card.Footer>
   {/if}
 </Card.Root>

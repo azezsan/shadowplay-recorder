@@ -2,11 +2,13 @@
 //! `specta_builder`, which is what generates its TypeScript binding.
 
 use std::path::Path;
+use std::sync::mpsc;
 
 use recorder_core::engine::Status;
 use recorder_core::game::DEADLOCK;
 use recorder_core::settings::Settings;
 use recorder_core::setup::{self, SetupReport};
+use recorder_core::test_recording::TestRecordingError;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -81,4 +83,23 @@ pub async fn pick_recordings_folder(app: AppHandle, current: Option<String>) -> 
     // Blocking is fine here: async commands run off the main thread.
     let folder = picker.blocking_pick_folder()?.into_path().ok()?;
     Some(folder.to_string_lossy().into_owned())
+}
+
+/// Records a few seconds to prove the overlay, the record command and the
+/// recordings folder work together, and returns the recorded file's path.
+/// The engine thread runs it between steps and refuses it during a match.
+#[tauri::command]
+#[specta::specta]
+pub async fn test_recording(app: AppHandle) -> Result<String, TestRecordingError> {
+    let (reply, result) = mpsc::channel();
+    app.state::<AppState>()
+        .test_requests
+        .lock()
+        .unwrap()
+        .send(reply)
+        .expect("the engine thread has stopped");
+    tauri::async_runtime::spawn_blocking(move || result.recv())
+        .await
+        .expect("the test recording panicked")
+        .expect("the engine thread has stopped")
 }

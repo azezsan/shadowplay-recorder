@@ -226,6 +226,8 @@ pub(crate) mod testing {
         Ok,
         Fail,
         NoAck,
+        /// The overlay answers and refuses every command.
+        Reject,
     }
 
     /// Stands in for the overlay. A start that takes effect creates a
@@ -277,6 +279,7 @@ pub(crate) mod testing {
             }
             match self.mode {
                 Mode::Fail => Err(OverlayError::Unavailable("unreachable (test)".into())),
+                Mode::Reject => Err(OverlayError::Rejected("busy (test)".into())),
                 Mode::NoAck => {
                     if is_start {
                         self.create_recording();

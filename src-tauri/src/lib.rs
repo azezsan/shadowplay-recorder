@@ -13,6 +13,7 @@ mod activity;
 mod commands;
 
 use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Mutex, RwLock};
 use std::thread;
 use std::time::{Instant, SystemTime};
@@ -24,6 +25,7 @@ use recorder_core::platform::ProcessWindow;
 use recorder_core::session::Phase;
 use recorder_core::settings::Settings;
 use recorder_core::setup::default_recordings_folder;
+use recorder_core::test_recording::TestRecordingError;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_specta::{Builder, Event, collect_commands, collect_events};
@@ -41,7 +43,13 @@ pub struct AppState {
     /// until the app quits.
     pub settings_path: Option<PathBuf>,
     pub status: Mutex<Status>,
+    /// Asks the engine thread for a test recording; it answers on the
+    /// enclosed sender once the test is done.
+    pub test_requests: Mutex<Sender<TestRequest>>,
 }
+
+/// Where the engine thread sends a test recording's result.
+pub type TestRequest = Sender<Result<String, TestRecordingError>>;
 
 fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
@@ -52,7 +60,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_setup_report,
             commands::get_settings,
             commands::save_settings,
-            commands::pick_recordings_folder
+            commands::pick_recordings_folder,
+            commands::test_recording
         ])
         .events(collect_events![StatusChanged, activity::ActivityAdded])
 }
@@ -70,8 +79,9 @@ pub fn export_bindings() {
         .expect("failed to export the TypeScript bindings");
 }
 
-/// Steps the engine once a second for the life of the app.
-fn run_engine(app: AppHandle) {
+/// Steps the engine once a second for the life of the app, and runs test
+/// recordings between steps.
+fn run_engine(app: AppHandle, test_requests: Receiver<TestRequest>) {
     let overlay = Overlay::default();
     let window = ProcessWindow {
         process: DEADLOCK.process,
@@ -90,6 +100,10 @@ fn run_engine(app: AppHandle) {
         };
         if changed {
             let _ = StatusChanged(status).emit(&app);
+        }
+        // The engine refuses the test during a match.
+        for reply in test_requests.try_iter() {
+            let _ = reply.send(engine.test_recording());
         }
         thread::sleep(STEP_INTERVAL);
     }
@@ -121,6 +135,7 @@ pub fn run() {
                     Settings::load_or_first_launch(path, || default_recordings_folder(&DEADLOCK))
                 })
                 .unwrap_or_default();
+            let (test_sender, test_receiver) = mpsc::channel();
             app.manage(AppState {
                 settings: RwLock::new(settings),
                 settings_path,
@@ -128,10 +143,11 @@ pub fn run() {
                     phase: Phase::Idle,
                     match_id: None,
                 }),
+                test_requests: Mutex::new(test_sender),
             });
 
             let handle = app.handle().clone();
-            thread::spawn(move || run_engine(handle));
+            thread::spawn(move || run_engine(handle, test_receiver));
             Ok(())
         })
         .run(tauri::generate_context!())
