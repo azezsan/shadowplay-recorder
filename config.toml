@@ -1,0 +1,67 @@
+# Deadlock game-capture config. All paths/tunables live here.
+
+process           = "deadlock.exe"
+console_log       = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Deadlock\\game\\citadel\\console.log"
+recordings_folder = "C:\\Users\\shy\\Videos\\NVIDIA\\Deadlock"
+max_gb            = 200        # delete oldest recordings once the folder exceeds this
+exit_delay_s      = 30         # wait this long after the game closes before cleanup
+recordable_maps   = ["start"]  # only these maps trigger recording; everything else is skipped
+rename_template   = "{matchId}"
+start_delay_s            = 4    # wait this long after the map loads before the first record press
+                                #   (lets the fullscreen load settle so ShadowPlay catches the key)
+start_window_s           = 120  # keep retrying the start for up to this long
+start_attempt_interval_s = 15   # seconds between record-command re-sends while waiting for the file
+                                #   (must exceed ShadowPlay's file-creation latency so a retry never
+                                #    toggles OFF a recording that just started)
+stop_delay_s             = 10   # after a match ends, keep recording this long before stopping
+                                #   (captures the post-match screen); 0 = stop immediately
+focus_on_match_start     = true # when a match starts, bring the game window to the foreground
+                                #   (you're usually alt-tabbed while queueing), and again before
+                                #   every record-start attempt until recording is confirmed
+
+# Periodic break reminders, signalled by a notification sound. Suppressed while
+# the game is running, so nothing plays mid-match. A reminder due mid-game is
+# queued and plays once defer_delay_s after the game closes (multiple dues
+# during one session collapse into a single nudge).
+[reminders]
+enabled       = true
+interval_s    = 3600     # how often to remind (3600 = hourly)
+defer_delay_s = 60       # after a mid-game reminder, wait this long past game-close, then play
+# The cue is a distinct chime (NOT a Windows system sound), so you won't confuse
+# it with another app. It's rendered as smooth sine tones with a soft decay — a
+# gentle glockenspiel, not a square-wave beep. Customize it below, or set
+# sound_file to a .wav to play that instead (sound_file takes precedence).
+sound_file    = ""       # path to a custom .wav; empty = use the chime
+# tones: each [frequency_hz, duration_ms] note, played in order. Defaults to a
+# soft descending C6-G5 chime if omitted. Try the result with:
+#   uv run python -m deadlock_capture --test-sound
+tones = [[1047, 150], [784, 250]]
+
+# NVIDIA App CEF-IPC channel — the programmatic ShadowPlay control the daemon
+# uses (the same one the overlay's Record button uses), reached over the Chrome
+# DevTools Protocol. See the README section "Programmatic control" for the
+# one-time overlay setup.
+[ipc]
+# CEF remote-debugging endpoint exposed by the NVIDIA Overlay. The port MUST
+# match the  nv-remote-debugging-port=<port>  line you add to
+#   C:\Program Files\NVIDIA Corporation\NVIDIA App\CEF\Resources\NVIDIA Overlay.json
+# Host stays loopback so the port is never reachable from off the machine.
+host       = "127.0.0.1"
+debug_port = 49222
+connect_timeout_s = 2.0   # giving up reaching the debug port
+call_timeout_s    = 5.0   # giving up waiting for a command to be acked
+
+# The ShadowPlay start/stop command (ShareServer module). "EnableRecord" is the
+# high-level manual-record toggle the overlay's Record button uses — start with
+# {enable = true}, stop-and-save with {enable = false}. (The lower-level
+# StartDiskCapture / StopAndSaveDiskCapture methods exist too but require a
+# fuller parameters schema.) If a future NVIDIA App changes this, rediscover the
+# exact call with:
+#   uv run python -m deadlock_capture --discover-ipc
+# then click Record / Stop in the overlay (Alt+Z) and copy the method/payload here.
+system        = "CrimsonNative"
+module        = "ShareServer"
+start_method  = "EnableRecord"
+stop_method   = "EnableRecord"
+start_payload = { enable = true }
+stop_payload  = { enable = false }
