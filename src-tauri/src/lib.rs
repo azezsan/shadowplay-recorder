@@ -34,9 +34,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_specta::{Builder, Event, collect_commands, collect_events};
 
-/// Makes the app patch the NVIDIA overlay config and exit. See `main`.
-pub const PATCH_OVERLAY_FLAG: &str = "--patch-overlay";
-
 /// Emitted whenever the status changes.
 #[derive(Debug, Clone, Serialize, specta::Type, Event)]
 pub struct StatusChanged(pub Status);
@@ -77,6 +74,7 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::set_start_with_windows
         ])
         .events(collect_events![StatusChanged, activity::ActivityAdded])
+        .constant("ACTIVITY_KEPT_IN_MEMORY", activity::KEPT_IN_MEMORY)
 }
 
 /// Makes a debug build write the TypeScript bindings and exit. See `main`.
@@ -183,7 +181,7 @@ pub fn run() {
                 })
                 .unwrap_or_default();
             let (request_sender, request_receiver) = mpsc::channel();
-            let status = Status::idle();
+            let status = Status::idle(&DEADLOCK);
             tray::install(app.handle(), &status)?;
             app.manage(AppState {
                 settings: RwLock::new(settings),

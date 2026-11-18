@@ -6,16 +6,16 @@ use std::sync::mpsc;
 
 use recorder_core::engine::Status;
 use recorder_core::game::DEADLOCK;
+use recorder_core::overlay_setup;
 use recorder_core::settings::Settings;
 use recorder_core::setup::{self, SetupReport};
 use recorder_core::test_recording::TestRecordingError;
-use recorder_core::{overlay_setup, platform};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::activity::{self, ActivityEntry};
-use crate::{AppState, EngineRequest, PATCH_OVERLAY_FLAG};
+use crate::{AppState, EngineRequest};
 
 /// The current status, for a window that has just opened. Later changes
 /// arrive as `StatusChanged` events.
@@ -57,15 +57,7 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 #[tauri::command]
 #[specta::specta]
 pub fn save_settings(state: State<'_, AppState>, settings: Settings) -> Result<Settings, String> {
-    let settings = settings.normalized();
-    let path = state
-        .settings_path
-        .as_deref()
-        .ok_or("the app has no folder to keep its settings in")?;
-    settings
-        .save(path)
-        .map_err(|e| format!("could not save the settings: {e}"))?;
-    log::info!("settings saved");
+    let settings = settings.save_from_window(state.settings_path.as_deref())?;
     *state.settings.write().unwrap() = settings.clone();
     Ok(settings)
 }
@@ -121,17 +113,8 @@ pub fn get_version(app: AppHandle) -> String {
 #[specta::specta]
 pub async fn repair_overlay() -> Result<(), String> {
     tauri::async_runtime::spawn_blocking(|| {
-        let config = overlay_setup::config_path();
         let exe = std::env::current_exe().map_err(|e| format!("could not find the app: {e}"))?;
-        log::info!("repairing the overlay's debug switch");
-        let result = overlay_setup::repair(config.as_deref(), || {
-            platform::run_elevated(&exe, PATCH_OVERLAY_FLAG)
-        });
-        match &result {
-            Ok(()) => log::info!("added the debug switch; the NVIDIA App needs a restart"),
-            Err(e) => log::warn!("could not add the debug switch: {e}"),
-        }
-        result.map_err(|e| e.to_string())
+        overlay_setup::repair_installed(&exe).map_err(|e| e.to_string())
     })
     .await
     .expect("the overlay repair panicked")

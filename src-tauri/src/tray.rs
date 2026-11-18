@@ -4,7 +4,6 @@
 //! The tooltip text and the login-launch flag live in `recorder_core::tray`.
 
 use recorder_core::engine::Status;
-use recorder_core::game::DEADLOCK;
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Window, WindowEvent};
@@ -36,7 +35,7 @@ pub fn install(app: &AppHandle, status: &Status) -> tauri::Result<()> {
         ],
     )?;
     let mut tray = TrayIconBuilder::with_id(TRAY_ID)
-        .tooltip(recorder_core::tray::tooltip(&DEADLOCK, status))
+        .tooltip(recorder_core::tray::tooltip(status))
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -65,7 +64,7 @@ pub fn install(app: &AppHandle, status: &Status) -> tauri::Result<()> {
 /// Makes the tooltip follow the status.
 pub fn show_status(app: &AppHandle, status: &Status) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        let _ = tray.set_tooltip(Some(recorder_core::tray::tooltip(&DEADLOCK, status)));
+        let _ = tray.set_tooltip(Some(recorder_core::tray::tooltip(status)));
     }
 }
 

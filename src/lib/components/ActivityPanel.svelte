@@ -1,10 +1,13 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { commands, events, type ActivityEntry, type Level } from "$lib/bindings";
+  import {
+    ACTIVITY_KEPT_IN_MEMORY as KEPT,
+    commands,
+    events,
+    type ActivityEntry,
+    type Level,
+  } from "$lib/bindings";
   import * as Card from "$lib/components/ui/card";
-
-  // The shell keeps the same number in memory.
-  const KEPT = 200;
 
   const levels: Record<Level, { label: string; row: string; tag: string }> = {
     info: { label: "Info", row: "", tag: "text-muted-foreground" },

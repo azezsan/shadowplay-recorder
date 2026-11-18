@@ -5,8 +5,9 @@
 //! `overlay` reaches it. The file sits under Program Files, so writing it
 //! needs administrator rights, and an NVIDIA App update can reset it.
 //!
-//! `repair` is the Fix button: it relaunches the app with administrator
-//! rights and `--patch-overlay`, which runs `patch_and_exit_code` and exits.
+//! `repair_installed` is the Fix button: it relaunches the app with
+//! administrator rights and `--patch-overlay`, which runs
+//! `patch_and_exit_code` and exits.
 //!
 //! The port is unauthenticated: any program on the same machine can use it to
 //! run code in the overlay page. It is not reachable from other machines.
@@ -19,9 +20,13 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::overlay::DEBUG_PORT;
-use crate::platform::ElevationError;
+use crate::platform::{self, ElevationError};
 
 const SWITCH_NAME: &str = "nv-remote-debugging-port";
+
+/// Makes the app run `patch_and_exit_code` and exit. `repair` relaunches the
+/// app with administrator rights and this flag.
+pub const PATCH_OVERLAY_FLAG: &str = "--patch-overlay";
 
 /// Where the NVIDIA App keeps the overlay's switches, if it is installed.
 pub fn config_path() -> Option<PathBuf> {
@@ -76,18 +81,12 @@ pub fn with_debug_switch(text: &str) -> Result<Option<String>, String> {
         .map_err(|e| e.to_string())
 }
 
-/// Adds the switch to the file, keeping a `.bak` copy of the original.
-/// Returns whether the file changed.
-pub fn patch_file(path: &Path) -> io::Result<bool> {
-    let text = fs::read_to_string(path)?;
-    let Some(patched) = with_debug_switch(&text).map_err(io::Error::other)? else {
-        return Ok(false);
-    };
+/// Writes `patched` over `path`, keeping `original` as a `.bak` copy.
+fn write_patched(path: &Path, original: &str, patched: &str) -> io::Result<()> {
     let mut backup = path.as_os_str().to_owned();
     backup.push(".bak");
-    fs::write(backup, &text)?;
-    fs::write(path, patched)?;
-    Ok(true)
+    fs::write(backup, original)?;
+    fs::write(path, patched)
 }
 
 /// Why the overlay could not be repaired. Its text is shown to the user.
@@ -140,13 +139,30 @@ pub fn patch_and_exit_code(config: Option<&Path>) -> u8 {
     let Ok(text) = fs::read_to_string(path) else {
         return EXIT_UNREADABLE;
     };
-    if with_debug_switch(&text).is_err() {
-        return EXIT_NOT_UNDERSTOOD;
-    }
-    match patch_file(path) {
-        Ok(_) => EXIT_PATCHED,
+    let patched = match with_debug_switch(&text) {
+        Ok(Some(patched)) => patched,
+        Ok(None) => return EXIT_PATCHED,
+        Err(_) => return EXIT_NOT_UNDERSTOOD,
+    };
+    match write_patched(path, &text, &patched) {
+        Ok(()) => EXIT_PATCHED,
         Err(_) => EXIT_WRITE_FAILED,
     }
+}
+
+/// The Fix button: repairs the installed NVIDIA App's overlay config by
+/// relaunching `exe` with administrator rights and [`PATCH_OVERLAY_FLAG`].
+pub fn repair_installed(exe: &Path) -> Result<(), RepairError> {
+    log::info!("repairing the overlay's debug switch");
+    let config = config_path();
+    let result = repair(config.as_deref(), || {
+        platform::run_elevated(exe, PATCH_OVERLAY_FLAG)
+    });
+    match &result {
+        Ok(()) => log::info!("added the debug switch; the NVIDIA App needs a restart"),
+        Err(e) => log::warn!("could not add the debug switch: {e}"),
+    }
+    result
 }
 
 /// Adds the debug switch to `config` by running `elevate`, which must run
@@ -236,11 +252,19 @@ mod tests {
         let path = dir.path().join("NVIDIA Overlay.json");
         fs::write(&path, ORIGINAL).unwrap();
 
-        assert!(patch_file(&path).unwrap());
-        assert!(has_debug_switch(&fs::read_to_string(&path).unwrap()));
+        assert_eq!(patch_and_exit_code(Some(&path)), EXIT_PATCHED);
+        let patched = fs::read_to_string(&path).unwrap();
+        assert!(has_debug_switch(&patched));
         let backup = dir.path().join("NVIDIA Overlay.json.bak");
-        assert_eq!(fs::read_to_string(backup).unwrap(), ORIGINAL);
-        assert!(!patch_file(&path).unwrap());
+        assert_eq!(fs::read_to_string(&backup).unwrap(), ORIGINAL);
+
+        assert_eq!(patch_and_exit_code(Some(&path)), EXIT_PATCHED);
+        assert_eq!(fs::read_to_string(&path).unwrap(), patched);
+        assert_eq!(
+            fs::read_to_string(backup).unwrap(),
+            ORIGINAL,
+            "patching twice keeps the original backup"
+        );
     }
 
     fn overlay_config(text: &str) -> (tempfile::TempDir, PathBuf) {
@@ -298,7 +322,7 @@ mod tests {
     #[test]
     fn an_already_patched_file_needs_no_prompt() {
         let (_dir, path) = overlay_config(ORIGINAL);
-        patch_file(&path).unwrap();
+        patch_and_exit_code(Some(&path));
         assert_eq!(repair(Some(&path), || panic!("no prompt expected")), Ok(()));
     }
 

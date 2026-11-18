@@ -71,6 +71,9 @@ export const events = {
 	statusChanged: makeEvent<StatusChanged, StatusChanged>("status-changed"),
 };
 
+/* Constants */
+export const ACTIVITY_KEPT_IN_MEMORY = 200 as const;
+
 /* Types */
 /**  Emitted for every new entry. */
 export type ActivityAdded = ActivityEntry;
@@ -153,6 +156,8 @@ export type SetupReport = {
 export type Status = {
 	phase: Phase,
 	matchId: string | null,
+	/**  The phase in words, for the window's status line and the tray. */
+	label: string,
 	/**  A test recording is running. The phase stays what it was meanwhile. */
 	testRecordingRunning: boolean,
 	/**  A test recording may be started now. */

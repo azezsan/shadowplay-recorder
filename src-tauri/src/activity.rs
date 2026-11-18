@@ -17,7 +17,9 @@ use serde::Serialize;
 use tauri::AppHandle;
 use tauri_specta::Event;
 
-const KEPT_IN_MEMORY: usize = 200;
+/// How many entries are kept in memory. The window keeps as many; it reads
+/// this from the bindings.
+pub const KEPT_IN_MEMORY: usize = 200;
 const MAX_FILE_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, specta::Type)]
@@ -26,6 +28,17 @@ pub enum Level {
     Info,
     Warning,
     Error,
+}
+
+impl Level {
+    /// The level as written to the log file.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Level::Info => "info",
+            Level::Warning => "warning",
+            Level::Error => "error",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, specta::Type)]
@@ -111,12 +124,8 @@ impl log::Log for Activity {
         };
 
         if let Some(file) = self.file.lock().unwrap().as_mut() {
-            let level = match entry.level {
-                Level::Info => "info",
-                Level::Warning => "warning",
-                Level::Error => "error",
-            };
-            let _ = writeln!(file, "{}", activity::log_line(now, level, &entry.message));
+            let line = activity::log_line(now, entry.level.as_str(), &entry.message);
+            let _ = writeln!(file, "{line}");
         }
         {
             let mut recent = self.recent.lock().unwrap();

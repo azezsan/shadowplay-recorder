@@ -147,14 +147,10 @@ mod tests {
     use std::time::SystemTime;
 
     use super::*;
+    use crate::game::DEADLOCK;
 
     fn status(phase: Phase, test_recording_running: bool) -> Status {
-        Status {
-            phase,
-            match_id: None,
-            test_recording_running,
-            test_recording_allowed: false,
-        }
+        Status::new(&DEADLOCK, phase, None, test_recording_running)
     }
 
     #[test]

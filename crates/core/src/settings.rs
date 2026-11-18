@@ -86,6 +86,19 @@ impl Settings {
         settings
     }
 
+    /// Saves settings edited in the window: clamps them, writes them to
+    /// `path` (`None` when the OS gave the app no config folder) and returns
+    /// what was saved. The error is a sentence for the user.
+    pub fn save_from_window(self, path: Option<&Path>) -> Result<Self, String> {
+        let settings = self.normalized();
+        let path = path.ok_or("the app has no folder to keep its settings in")?;
+        settings
+            .save(path)
+            .map_err(|e| format!("could not save the settings: {e}"))?;
+        log::info!("settings saved");
+        Ok(settings)
+    }
+
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -140,6 +153,29 @@ mod tests {
 
         let settings = Settings::load_or_first_launch(&path, || Some(dir.path().to_path_buf()));
         assert_eq!(settings.recordings_folder, None);
+    }
+
+    #[test]
+    fn saving_from_the_window_stores_what_the_app_will_use() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let edited = Settings {
+            console_log: Some(" ".into()),
+            max_size_gb: 0.0,
+            ..Settings::default()
+        };
+        let saved = edited.save_from_window(Some(&path)).unwrap();
+        assert_eq!(saved.console_log, None);
+        assert_eq!(saved.max_size_gb, 1.0);
+        assert_eq!(Settings::load(&path), saved);
+    }
+
+    #[test]
+    fn saving_without_a_settings_folder_is_refused() {
+        assert_eq!(
+            Settings::default().save_from_window(None),
+            Err("the app has no folder to keep its settings in".to_string())
+        );
     }
 
     #[test]

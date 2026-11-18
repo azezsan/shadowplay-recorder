@@ -60,6 +60,8 @@ impl Host for SystemHost {
 pub struct Status {
     pub phase: Phase,
     pub match_id: Option<String>,
+    /// The phase in words, for the window's status line and the tray.
+    pub label: String,
     /// A test recording is running. The phase stays what it was meanwhile.
     pub test_recording_running: bool,
     /// A test recording may be started now.
@@ -68,17 +70,45 @@ pub struct Status {
 
 impl Status {
     /// The status before the engine's first step.
-    pub fn idle() -> Self {
-        Self::of(Phase::Idle, None, false)
+    pub fn idle(game: &GameProfile) -> Self {
+        Self::new(game, Phase::Idle, None, false)
     }
 
-    fn of(phase: Phase, match_id: Option<String>, test_recording_running: bool) -> Self {
+    pub fn new(
+        game: &GameProfile,
+        phase: Phase,
+        match_id: Option<String>,
+        test_recording_running: bool,
+    ) -> Self {
         Self {
+            label: label(game, phase, match_id.as_deref()),
             phase,
             match_id,
             test_recording_running,
             test_recording_allowed: !test_recording_running && test_recording::allowed_in(phase),
         }
+    }
+}
+
+/// The phase in words.
+fn label(game: &GameProfile, phase: Phase, match_id: Option<&str>) -> String {
+    let name = game.name;
+    let of_match = |id: &str| format!(" of match {id}");
+    match (phase, match_id) {
+        (Phase::Idle, _) => format!("Waiting for {name}"),
+        (Phase::GameRunning, _) => format!("{name} is running"),
+        (Phase::InMatch, Some(id)) => format!("In match {id}, not recording"),
+        (Phase::InMatch, None) => "In a match, not recording".to_string(),
+        (Phase::Starting, id) => format!(
+            "Starting the recording{}",
+            id.map(of_match).unwrap_or_default()
+        ),
+        (Phase::Recording, Some(id)) => format!("Recording match {id}"),
+        (Phase::Recording, None) => "Recording".to_string(),
+        (Phase::Finishing, id) => format!(
+            "Saving the recording{}",
+            id.map(of_match).unwrap_or_default()
+        ),
     }
 }
 
@@ -182,7 +212,8 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
     }
 
     fn status_with(&self, test_recording_running: bool) -> Status {
-        Status::of(
+        Status::new(
+            self.game,
             self.session.phase(),
             self.session.match_id().map(str::to_string),
             test_recording_running,
