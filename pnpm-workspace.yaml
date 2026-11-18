@@ -1,0 +1,6 @@
+auditConfig:
+  ignoreGhsas:
+    # picomatch ReDoS, no patched release exists yet. It is only reached
+    # through build tools (Vite, svelte-check) matching globs written in this
+    # repo, never through the shipped app. Remove once a fix is published.
+    - GHSA-fc5q-39xc-vjpf

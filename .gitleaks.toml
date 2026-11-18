@@ -1,0 +1,14 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Build output, dependencies and other agents' worktrees"
+paths = [
+  '''(^|/)node_modules/''',
+  '''(^|/)target/''',
+  '''(^|/)dist/''',
+  '''(^|/)\.svelte-check/''',
+  '''(^|/)\.claude/worktrees/''',
+  '''(^|/)src-tauri/gen/''',
+  '''(^|/)\.git/''',
+]

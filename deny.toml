@@ -1,0 +1,33 @@
+# cargo-deny: security advisories, licenses and sources for every Rust dependency.
+
+[graph]
+targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
+
+[advisories]
+# Unmaintained crates deep inside Tauri's Linux stack are not ours to replace.
+unmaintained = "workspace"
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CC0-1.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

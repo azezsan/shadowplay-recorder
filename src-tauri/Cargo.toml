@@ -1,0 +1,35 @@
+[package]
+name = "shadowplay-recorder"
+description = "Records Deadlock matches with NVIDIA ShadowPlay"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[lib]
+# The suffix keeps the library name distinct from the binary, which Windows
+# needs (rust-lang/cargo#8519).
+name = "shadowplay_recorder_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+# A test binary of this crate cannot load on Windows: it lacks the app manifest.
+test = false
+doctest = false
+
+[[bin]]
+name = "shadowplay-recorder"
+path = "src/main.rs"
+test = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+log = { version = "0.4", features = ["std"] }
+recorder-core = { path = "../crates/core" }
+serde = { version = "1", features = ["derive"] }
+specta = "=2.0.0-rc.28"
+specta-typescript = "=0.0.15"
+tauri = { version = "2", features = [] }
+tauri-specta = { version = "=2.0.0-rc.29", features = ["derive", "typescript"] }
