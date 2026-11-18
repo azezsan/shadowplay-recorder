@@ -78,6 +78,10 @@ pub struct Engine<C: RecordChannel, W: GameWindow, H: Host> {
     host: H,
     session: Session<ShadowPlayRecorder<C>, W>,
     settings: Settings,
+    /// The recordings folder in use. A changed folder is taken into use only
+    /// out of a match, so a recording is always stopped and named in the
+    /// folder it was started in.
+    folder: Option<String>,
     tailer: Option<Tailer>,
     next_process_poll: Duration,
     cleanup_at: Option<Duration>,
@@ -95,6 +99,7 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             host,
             session: Session::new(game, SessionConfig::default(), recorder, window),
             settings: Settings::default(),
+            folder: None,
             tailer: None,
             next_process_poll: Duration::ZERO,
             // Also apply the cap once at startup.
@@ -129,14 +134,30 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
         }
         self.session.config.focus_on_match_start = settings.focus_on_match_start;
         self.session.config.stop_delay = Duration::from_secs(settings.stop_delay_seconds.into());
-        self.session
-            .recorder_mut()
-            .set_folder(settings.recordings_folder.clone().unwrap_or_default());
-        self.warned_no_folder = false;
         if settings.console_log != self.settings.console_log {
             self.tailer = None;
         }
         self.settings = settings;
+        self.take_up_folder();
+    }
+
+    /// Takes the recordings folder from the settings into use, unless a
+    /// match is in progress.
+    fn take_up_folder(&mut self) {
+        if self.folder == self.settings.recordings_folder {
+            return;
+        }
+        if !matches!(self.session.phase(), Phase::Idle | Phase::GameRunning) {
+            return;
+        }
+        if self.folder.is_some() {
+            log::info!("now recording to {:?}", self.settings.recordings_folder);
+        }
+        self.folder = self.settings.recordings_folder.clone();
+        self.session
+            .recorder_mut()
+            .set_folder(self.folder.clone().unwrap_or_default());
+        self.warned_no_folder = false;
     }
 
     pub fn status(&self) -> Status {
@@ -166,7 +187,8 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             log::info!("test recording refused: the recorder is busy ({phase:?})");
             return Err(TestRecordingError::Busy { phase });
         }
-        let Some(folder) = self.settings.recordings_folder.clone() else {
+        self.take_up_folder();
+        let Some(folder) = self.folder.clone() else {
             return Err(TestRecordingError::NoRecordingsFolder);
         };
         let timing = self.test_recording_timing;
@@ -187,6 +209,7 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
     }
 
     pub fn step(&mut self, now: Duration, wall: SystemTime) -> Status {
+        self.take_up_folder();
         if now >= self.next_process_poll {
             self.next_process_poll = now + PROCESS_POLL_INTERVAL;
             let exited = self
@@ -203,10 +226,12 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             self.read_console_log(now, wall);
         }
         self.session.tick(now);
+        // A match may have just ended.
+        self.take_up_folder();
 
         if self.cleanup_at.is_some_and(|at| now >= at) {
             self.cleanup_at = None;
-            if let Some(folder) = &self.settings.recordings_folder {
+            if let Some(folder) = &self.folder {
                 let cap = retention::gib_to_bytes(self.settings.max_size_gb);
                 retention::enforce_size_cap(Path::new(folder), cap);
             }
@@ -245,7 +270,7 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             };
             // Without a folder a recording could be started but never
             // confirmed or stopped, so nothing is recorded at all.
-            if self.settings.recordings_folder.is_none() {
+            if self.folder.is_none() {
                 if !self.warned_no_folder {
                     self.warned_no_folder = true;
                     log::warn!("no recordings folder is set; matches are not recorded");
@@ -480,6 +505,36 @@ mod tests {
         assert_eq!(f.run(3).phase, Phase::GameRunning);
         f.engine.quit();
         assert!(f.sent().is_empty());
+    }
+
+    #[test]
+    fn a_folder_change_mid_match_waits_for_the_match_to_end() {
+        let mut f = Fixture::new(true);
+        f.running.set(true);
+        f.run(3);
+        f.write_log("Lobby 5 for Match 1 created\n[Client] Map: \"start\"\n");
+        assert_eq!(f.run(2).phase, Phase::Recording);
+
+        // The player picks another folder while ShadowPlay still records
+        // into the old one.
+        let moved = f.recordings.parent().unwrap().join("moved");
+        fs::create_dir(&moved).unwrap();
+        f.change_settings(|s| s.recordings_folder = Some(moved.to_string_lossy().into()));
+        f.write_log("Lobby 5 for Match 1 destroyed\n");
+        assert_eq!(f.run(1).phase, Phase::GameRunning);
+        assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
+        assert!(
+            f.recordings.join("1.mp4").exists(),
+            "named in the old folder"
+        );
+
+        // The next match uses the new folder.
+        f.engine.channel_mut().folder = Some(moved.clone());
+        f.write_log("Lobby 6 for Match 2 created\n[Client] Map: \"start\"\n");
+        assert_eq!(f.run(2).phase, Phase::Recording);
+        f.write_log("Lobby 6 for Match 2 destroyed\n");
+        f.run(1);
+        assert!(moved.join("2.mp4").exists());
     }
 
     #[test]
