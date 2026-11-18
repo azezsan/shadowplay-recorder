@@ -1,0 +1,64 @@
+name: Release
+
+# Pushing a tag `vX.Y.Z` builds the NSIS installer, signs the update, and
+# publishes both as a GitHub Release with the `latest.json` the updater reads.
+# How to cut and undo a release is in CLAUDE.md, "Releasing".
+
+on:
+  push:
+    tags: ["v*"]
+
+# Two tags pushed at once must not race to become the latest release.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Full history, to check the tagged commit is on main.
+          fetch-depth: 0
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+          cache: pnpm
+
+      - name: Tag matches the app version
+        run: node scripts/release-tag.ts "$GITHUB_REF_NAME"
+      - name: Tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Updater public key is set
+        run: |
+          if grep -q PLACEHOLDER-UPDATER-PUBLIC-KEY src-tauri/tauri.conf.json; then
+            echo "::error::plugins.updater.pubkey in src-tauri/tauri.conf.json is still the placeholder"
+            exit 1
+          fi
+
+      - run: pnpm install --frozen-lockfile
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: ShadowPlay Recorder ${{ github.ref_name }}
+          generateReleaseNotes: true
+          releaseDraft: false
+          prerelease: false
+          tauriScript: pnpm tauri
+          # latest.json, which the updater fetches from the latest release.
+          includeUpdaterJson: true

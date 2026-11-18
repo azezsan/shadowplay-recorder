@@ -37,6 +37,18 @@
       "nsis": {
         "installMode": "currentUser"
       }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "PLACEHOLDER-UPDATER-PUBLIC-KEY: replace with the contents of the .pub file from `pnpm tauri signer generate`",
+      "endpoints": [
+        "https://github.com/azezsan/shadowplay-recorder/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }
