@@ -111,9 +111,7 @@ impl fmt::Display for RepairError {
             Self::Declined => {
                 f.write_str("The administrator prompt was declined, so nothing was changed.")
             }
-            Self::NvidiaAppMissing => {
-                f.write_str("The NVIDIA App's overlay config was not found.")
-            }
+            Self::NvidiaAppMissing => f.write_str("The NVIDIA App's overlay config was not found."),
             Self::Unreadable(e) => write!(f, "The overlay config could not be read: {e}."),
             Self::NotUnderstood(e) => write!(
                 f,
@@ -178,9 +176,7 @@ pub fn repair(
         Ok(EXIT_UNREADABLE) => Err(RepairError::Unreadable(
             "the administrator copy could not open it".into(),
         )),
-        Ok(EXIT_NOT_UNDERSTOOD) => Err(RepairError::NotUnderstood(
-            "it is not valid JSON".into(),
-        )),
+        Ok(EXIT_NOT_UNDERSTOOD) => Err(RepairError::NotUnderstood("it is not valid JSON".into())),
         Ok(EXIT_WRITE_FAILED) => Err(RepairError::WriteFailed),
         _ => Err(RepairError::Failed(format!(
             "the administrator copy exited with code {code}"
@@ -303,10 +299,7 @@ mod tests {
     fn an_already_patched_file_needs_no_prompt() {
         let (_dir, path) = overlay_config(ORIGINAL);
         patch_file(&path).unwrap();
-        assert_eq!(
-            repair(Some(&path), || panic!("no prompt expected")),
-            Ok(())
-        );
+        assert_eq!(repair(Some(&path), || panic!("no prompt expected")), Ok(()));
     }
 
     #[test]

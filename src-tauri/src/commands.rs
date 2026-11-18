@@ -5,14 +5,14 @@ use std::path::Path;
 
 use recorder_core::engine::Status;
 use recorder_core::game::DEADLOCK;
-use recorder_core::{overlay_setup, platform};
 use recorder_core::settings::Settings;
 use recorder_core::setup::{self, SetupReport};
+use recorder_core::{overlay_setup, platform};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::{AppState, PATCH_OVERLAY_FLAG};
 use crate::activity::{self, ActivityEntry};
+use crate::{AppState, PATCH_OVERLAY_FLAG};
 
 /// The current status, for a window that has just opened. Later changes
 /// arrive as `StatusChanged` events.
