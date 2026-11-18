@@ -13,6 +13,7 @@ const steps: [name: string, command: string][] = [
   ["generate the bindings", "cargo run -p shadowplay-recorder -- --export-bindings"],
   ["bindings are up to date", "git diff --exit-code -- src/lib/bindings.ts"],
   ["Rust tests", "cargo test --workspace"],
+  ["script tests", 'node --test "scripts/*.test.ts"'],
   ["Prettier", "pnpm exec prettier --check ."],
   ["ESLint", "pnpm exec eslint ."],
   ["svelte-check", "pnpm exec svelte-check --tsgo --tsconfig ./tsconfig.json"],

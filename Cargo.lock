@@ -3046,6 +3046,7 @@ dependencies = [
  "log",
  "recorder-core",
  "serde",
+ "serde_json",
  "specta",
  "specta-typescript",
  "tauri",
