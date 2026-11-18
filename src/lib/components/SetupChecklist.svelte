@@ -5,10 +5,16 @@
 -->
 <script lang="ts">
   import CircleCheck from "@lucide/svelte/icons/circle-check";
-  import type { ConsoleLogState, FolderState, OverlayState } from "$lib/bindings";
+  import {
+    commands,
+    type ConsoleLogState,
+    type FolderState,
+    type OverlayState,
+  } from "$lib/bindings";
   import SetupCheck from "$lib/components/SetupCheck.svelte";
+  import { Button } from "$lib/components/ui/button";
   import * as Card from "$lib/components/ui/card";
-  import { setup, watchSetup } from "$lib/setup.svelte";
+  import { refreshSetup, setup, watchSetup } from "$lib/setup.svelte";
 
   type Explained = { title: string; help?: string; steps?: string[] };
 
@@ -20,7 +26,7 @@
     },
     switchMissing: {
       title: "The overlay's debug switch is missing",
-      help: "The overlay's config needs one line that lets this app press Record. An NVIDIA App update can remove it.",
+      help: "The overlay's config needs one line that lets this app press Record. An NVIDIA App update can remove it. Fix adds it after one administrator prompt and keeps a backup of the original.",
     },
     notReachable: {
       title: "The NVIDIA App needs a full restart",
@@ -72,7 +78,38 @@
   );
 
   $effect(() => watchSetup());
+
+  // The overlay fix: running while the administrator prompt is open, and why
+  // the last attempt failed.
+  let repairing = $state(false);
+  let repairError = $state<string | null>(null);
+
+  async function repairOverlay() {
+    repairing = true;
+    repairError = null;
+    try {
+      await commands.repairOverlay();
+    } catch (e) {
+      repairError = String(e);
+    } finally {
+      await refreshSetup();
+      repairing = false;
+    }
+  }
 </script>
+
+{#snippet overlayFix()}
+  <div class="flex flex-col gap-1.5">
+    <div>
+      <Button size="sm" onclick={repairOverlay} disabled={repairing}>
+        {repairing ? "Waiting for the administrator prompt…" : "Fix"}
+      </Button>
+    </div>
+    {#if repairError}
+      <p class="text-destructive text-sm" role="alert">{repairError}</p>
+    {/if}
+  </div>
+{/snippet}
 
 <Card.Root>
   {#if report === null}
@@ -92,7 +129,11 @@
     <Card.Content>
       <ul class="flex flex-col gap-4" aria-live="polite">
         <!-- Each check takes its fix button as an `action` snippet. -->
-        <SetupCheck ready={report.overlay === "ready"} {...overlay[report.overlay]} />
+        <SetupCheck
+          ready={report.overlay === "ready"}
+          {...overlay[report.overlay]}
+          action={report.overlay === "switchMissing" ? overlayFix : undefined}
+        />
         <SetupCheck ready={report.consoleLog === "ready"} {...consoleLog[report.consoleLog]} />
         <SetupCheck
           ready={report.recordingsFolder === "ready"}

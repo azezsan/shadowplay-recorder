@@ -36,6 +36,12 @@ export const commands = {
 	pickRecordingsFolder: (current: string | null, options?: InvokeOptions) => __TAURI_INVOKE<string | null>("pick_recordings_folder", { current }, options),
 	/**  The version of the running app, shown in the window. */
 	getVersion: (options?: InvokeOptions) => __TAURI_INVOKE<string>("get_version", undefined, options),
+	/**
+	 *  Adds the debug switch to the NVIDIA overlay config: the app relaunches
+	 *  itself with administrator rights and `--patch-overlay`, behind one
+	 *  Windows prompt. The error is a sentence for the user.
+	 */
+	repairOverlay: (options?: InvokeOptions) => __TAURI_INVOKE<null>("repair_overlay", undefined, options),
 };
 
 /** Events */

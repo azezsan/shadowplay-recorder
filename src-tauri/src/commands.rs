@@ -7,11 +7,12 @@ use recorder_core::engine::Status;
 use recorder_core::game::DEADLOCK;
 use recorder_core::settings::Settings;
 use recorder_core::setup::{self, SetupReport};
+use recorder_core::{overlay_setup, platform};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::AppState;
 use crate::activity::{self, ActivityEntry};
+use crate::{AppState, PATCH_OVERLAY_FLAG};
 
 /// The current status, for a window that has just opened. Later changes
 /// arrive as `StatusChanged` events.
@@ -88,4 +89,27 @@ pub async fn pick_recordings_folder(app: AppHandle, current: Option<String>) -> 
 #[specta::specta]
 pub fn get_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+/// Adds the debug switch to the NVIDIA overlay config: the app relaunches
+/// itself with administrator rights and `--patch-overlay`, behind one
+/// Windows prompt. The error is a sentence for the user.
+#[tauri::command]
+#[specta::specta]
+pub async fn repair_overlay() -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let config = overlay_setup::config_path();
+        let exe = std::env::current_exe().map_err(|e| format!("could not find the app: {e}"))?;
+        log::info!("repairing the overlay's debug switch");
+        let result = overlay_setup::repair(config.as_deref(), || {
+            platform::run_elevated(&exe, PATCH_OVERLAY_FLAG)
+        });
+        match &result {
+            Ok(()) => log::info!("added the debug switch; the NVIDIA App needs a restart"),
+            Err(e) => log::warn!("could not add the debug switch: {e}"),
+        }
+        result.map_err(|e| e.to_string())
+    })
+    .await
+    .expect("the overlay repair panicked")
 }
