@@ -5,21 +5,45 @@
 //! As in a match, the file is the proof and a command sent without a reply
 //! counts as sent. The stop is only sent once the file exists, because a stop
 //! with nothing recording would start a recording instead.
+//!
+//! So that the test never leaves a recording running, a file that is slow to
+//! appear is still waited for, for `late_file_grace`, and stopped once it
+//! does. A file that never appears in the folder may still be recording
+//! somewhere else; that cannot be seen from here, so the error tells the
+//! user to check, rather than sending a blind stop.
 //! `Engine::test_recording` refuses the test during a match, so it can never
 //! interfere with a real recording.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::Serialize;
 
 use crate::overlay::{OverlayError, RecordChannel, RecordCommand};
-use crate::recorder::newest_recording_since;
+use crate::recorder::{newest_recording_since, send};
 use crate::session::Phase;
 
-/// How long the test records before sending the stop.
-pub const TEST_RECORDING_LENGTH: Duration = Duration::from_secs(5);
+/// How long the test records and waits for its file.
+#[derive(Debug, Clone, Copy)]
+pub struct TestRecordingTiming {
+    /// How long the test records before sending the stop.
+    pub length: Duration,
+    /// How long after `length` a late file is still waited for.
+    pub late_file_grace: Duration,
+    /// How often the folder is checked while waiting.
+    pub poll: Duration,
+}
+
+impl Default for TestRecordingTiming {
+    fn default() -> Self {
+        Self {
+            length: Duration::from_secs(5),
+            late_file_grace: Duration::from_secs(15),
+            poll: Duration::from_millis(500),
+        }
+    }
+}
 
 /// Why a test recording failed or was refused.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
@@ -50,7 +74,7 @@ pub fn allowed_in(phase: Phase) -> bool {
 pub(crate) fn run(
     channel: &mut impl RecordChannel,
     folder: &Path,
-    length: Duration,
+    timing: TestRecordingTiming,
 ) -> Result<String, TestRecordingError> {
     log::info!("test recording: starting");
     let since = SystemTime::now();
@@ -60,9 +84,9 @@ pub(crate) fn run(
             detail: e.to_string(),
         },
     })?;
-    thread::sleep(length);
+    thread::sleep(timing.length);
 
-    let Some(recording) = newest_recording_since(folder, since) else {
+    let Some(recording) = wait_for_recording(folder, since, timing) else {
         log::warn!("test recording: no recording appeared in {folder:?}");
         return Err(TestRecordingError::NoRecordingAppeared {
             folder: folder.to_string_lossy().into_owned(),
@@ -77,17 +101,21 @@ pub(crate) fn run(
     Ok(recording)
 }
 
-/// Sends a command, treating a missing reply as sent.
-fn send(channel: &mut impl RecordChannel, command: RecordCommand) -> Result<(), OverlayError> {
-    match channel.send(command) {
-        Err(OverlayError::NoAck(e)) => {
-            log::info!("test recording: {command:?} command sent, no reply ({e})");
-            Ok(())
+/// The newest recording since `since`, waiting up to the grace period for
+/// one that is late.
+fn wait_for_recording(
+    folder: &Path,
+    since: SystemTime,
+    timing: TestRecordingTiming,
+) -> Option<PathBuf> {
+    let deadline = Instant::now() + timing.late_file_grace;
+    loop {
+        if let Some(recording) = newest_recording_since(folder, since) {
+            return Some(recording);
         }
-        Err(e) => {
-            log::warn!("test recording: {command:?} command failed: {e}");
-            Err(e)
+        if Instant::now() >= deadline {
+            return None;
         }
-        Ok(()) => Ok(()),
+        thread::sleep(timing.poll);
     }
 }

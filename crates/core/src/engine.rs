@@ -16,7 +16,7 @@ use crate::recorder::ShadowPlayRecorder;
 use crate::session::{GameWindow, Phase, Session, SessionConfig};
 use crate::settings::Settings;
 use crate::tail::Tailer;
-use crate::test_recording::{self, TEST_RECORDING_LENGTH, TestRecordingError};
+use crate::test_recording::{self, TestRecordingError, TestRecordingTiming};
 use crate::{platform, retention, setup};
 
 /// How often `step` should be called.
@@ -64,9 +64,7 @@ pub struct Engine<C: RecordChannel, W: GameWindow, H: Host> {
     log_missing_since: Option<Duration>,
     warned_log_missing: bool,
     warned_no_folder: bool,
-    /// How long a test recording runs. [`TEST_RECORDING_LENGTH`] outside
-    /// tests.
-    pub test_recording_length: Duration,
+    test_recording_timing: TestRecordingTiming,
 }
 
 impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
@@ -84,14 +82,24 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             log_missing_since: None,
             warned_log_missing: false,
             warned_no_folder: false,
-            test_recording_length: TEST_RECORDING_LENGTH,
+            test_recording_timing: TestRecordingTiming::default(),
         };
         engine.apply_settings(Settings::default());
         engine
     }
 
+    /// Replaces how long a test recording runs and waits; tests shorten it.
+    pub fn with_test_recording_timing(mut self, timing: TestRecordingTiming) -> Self {
+        self.test_recording_timing = timing;
+        self
+    }
+
     pub fn session_mut(&mut self) -> &mut Session<ShadowPlayRecorder<C>, W> {
         &mut self.session
+    }
+
+    fn channel_mut(&mut self) -> &mut C {
+        self.session.recorder_mut().channel_mut()
     }
 
     /// Takes new settings into use. Safe to call on every step.
@@ -120,8 +128,8 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
 
     /// Runs the setup checklist's test recording and returns the path of the
     /// file it recorded. Refused unless the phase is idle or game running.
-    /// Blocks for [`TEST_RECORDING_LENGTH`]; no step runs meanwhile, so a
-    /// match cannot start during the test.
+    /// Blocks for the test's length and its wait for a late file; no step
+    /// runs meanwhile, so a match cannot start during the test.
     pub fn test_recording(&mut self) -> Result<String, TestRecordingError> {
         let phase = self.session.phase();
         if !test_recording::allowed_in(phase) {
@@ -131,8 +139,8 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
         let Some(folder) = self.settings.recordings_folder.clone() else {
             return Err(TestRecordingError::NoRecordingsFolder);
         };
-        let channel = self.session.recorder_mut().channel_mut();
-        test_recording::run(channel, Path::new(&folder), self.test_recording_length)
+        let timing = self.test_recording_timing;
+        test_recording::run(self.channel_mut(), Path::new(&folder), timing)
     }
 
     pub fn step(&mut self, now: Duration, wall: SystemTime) -> Status {
@@ -218,7 +226,6 @@ mod tests {
     use crate::overlay::RecordCommand;
     use crate::recorder::RenameTiming;
     use crate::recorder::testing::{FakeChannel, Mode};
-    use crate::test_recording::TestRecordingError;
 
     struct FakeHost {
         running: Rc<Cell<bool>>,
@@ -278,7 +285,12 @@ mod tests {
             let window = FakeWindow {
                 focuses: focuses.clone(),
             };
-            let mut engine = Engine::new(&DEADLOCK, channel, window, host);
+            let mut engine = Engine::new(&DEADLOCK, channel, window, host)
+                .with_test_recording_timing(TestRecordingTiming {
+                    length: Duration::ZERO,
+                    late_file_grace: Duration::from_millis(300),
+                    poll: Duration::from_millis(10),
+                });
             let settings = Settings {
                 recordings_folder: with_folder.then(|| recordings.to_string_lossy().into()),
                 console_log: Some(log.to_string_lossy().into()),
@@ -289,8 +301,6 @@ mod tests {
             engine.apply_settings(settings.clone());
             let session = engine.session_mut();
             session.config.start_delay = Duration::ZERO;
-            engine.test_recording_length = Duration::ZERO;
-            let session = engine.session_mut();
             session.recorder_mut().set_timing(RenameTiming {
                 stable_for: Duration::from_millis(20),
                 poll: Duration::from_millis(10),
@@ -331,12 +341,7 @@ mod tests {
         }
 
         fn sent(&mut self) -> Vec<RecordCommand> {
-            self.engine
-                .session_mut()
-                .recorder_mut()
-                .channel()
-                .sent
-                .clone()
+            self.engine.channel_mut().sent.clone()
         }
     }
 
@@ -380,7 +385,7 @@ mod tests {
             s.stop_delay_seconds = 5;
             s.focus_on_match_start = false;
         });
-        f.engine.session_mut().recorder_mut().channel_mut().folder = Some(moved.clone());
+        f.engine.channel_mut().folder = Some(moved.clone());
 
         f.write_log("Lobby 6 for Match 2 created\n[Client] Map: \"start\"\n");
         assert_eq!(f.run(2).phase, Phase::Recording);
@@ -483,7 +488,7 @@ mod tests {
     #[test]
     fn a_test_recording_reports_an_unreachable_overlay() {
         let mut f = Fixture::new(true);
-        f.engine.session_mut().recorder_mut().channel_mut().mode = Mode::Fail;
+        f.engine.channel_mut().mode = Mode::Fail;
         assert!(matches!(
             f.engine.test_recording(),
             Err(TestRecordingError::OverlayUnreachable { .. })
@@ -494,7 +499,7 @@ mod tests {
     #[test]
     fn a_test_recording_reports_a_rejected_command() {
         let mut f = Fixture::new(true);
-        f.engine.session_mut().recorder_mut().channel_mut().mode = Mode::Reject;
+        f.engine.channel_mut().mode = Mode::Reject;
         assert!(matches!(
             f.engine.test_recording(),
             Err(TestRecordingError::StartRejected { detail }) if detail.contains("busy")
@@ -506,7 +511,7 @@ mod tests {
     fn a_test_recording_without_a_file_never_sends_the_stop() {
         let mut f = Fixture::new(true);
         // ShadowPlay saves somewhere other than the recordings folder.
-        f.engine.session_mut().recorder_mut().channel_mut().folder = None;
+        f.engine.channel_mut().folder = None;
         assert_eq!(
             f.engine.test_recording(),
             Err(TestRecordingError::NoRecordingAppeared {
@@ -517,9 +522,22 @@ mod tests {
     }
 
     #[test]
+    fn a_test_recording_stops_a_recording_whose_file_appears_late() {
+        let mut f = Fixture::new(true);
+        // ShadowPlay creates the file only after the test's few seconds.
+        f.engine.channel_mut().late_by = Some(Duration::from_millis(100));
+        let recording = f.engine.test_recording().unwrap();
+        assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
+        assert_eq!(
+            Path::new(&recording),
+            f.recordings.join("DefaultShadowPlay.mp4")
+        );
+    }
+
+    #[test]
     fn a_test_recording_counts_a_command_without_a_reply_as_sent() {
         let mut f = Fixture::new(true);
-        f.engine.session_mut().recorder_mut().channel_mut().mode = Mode::NoAck;
+        f.engine.channel_mut().mode = Mode::NoAck;
         assert!(f.engine.test_recording().is_ok());
         assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
     }

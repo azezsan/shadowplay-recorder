@@ -86,24 +86,6 @@ impl<C: RecordChannel> ShadowPlayRecorder<C> {
         &mut self.channel
     }
 
-    /// True if the command was accepted or sent without a reply.
-    fn send(&mut self, command: RecordCommand) -> bool {
-        match self.channel.send(command) {
-            Ok(()) => {
-                log::info!("{command:?} command accepted by the overlay");
-                true
-            }
-            Err(OverlayError::NoAck(e)) => {
-                log::info!("{command:?} command sent, no reply ({e})");
-                true
-            }
-            Err(e) => {
-                log::warn!("{command:?} command failed: {e}");
-                false
-            }
-        }
-    }
-
     fn wait_until_stable(&self, since: SystemTime) -> Option<PathBuf> {
         let deadline = Instant::now() + self.timing.give_up_after;
         let mut last: Option<(PathBuf, u64, Instant)> = None;
@@ -127,7 +109,7 @@ impl<C: RecordChannel> ShadowPlayRecorder<C> {
 
 impl<C: RecordChannel> Recorder for ShadowPlayRecorder<C> {
     fn start(&mut self) {
-        self.send(RecordCommand::Start);
+        let _ = send(&mut self.channel, RecordCommand::Start);
     }
 
     fn has_recording_since(&self, since: SystemTime) -> bool {
@@ -144,7 +126,7 @@ impl<C: RecordChannel> Recorder for ShadowPlayRecorder<C> {
                 }
             }
         }
-        self.send(RecordCommand::Stop);
+        let _ = send(&mut self.channel, RecordCommand::Stop);
         true
     }
 
@@ -175,6 +157,28 @@ impl<C: RecordChannel> Recorder for ShadowPlayRecorder<C> {
                 log::warn!("could not rename {recording:?}: {e}");
                 None
             }
+        }
+    }
+}
+
+/// Sends a record command. One sent without a reply counts as sent, because
+/// the overlay's reply is not trusted either way: the file is the proof.
+pub(crate) fn send(
+    channel: &mut impl RecordChannel,
+    command: RecordCommand,
+) -> Result<(), OverlayError> {
+    match channel.send(command) {
+        Ok(()) => {
+            log::info!("{command:?} command accepted by the overlay");
+            Ok(())
+        }
+        Err(OverlayError::NoAck(e)) => {
+            log::info!("{command:?} command sent, no reply ({e})");
+            Ok(())
+        }
+        Err(e) => {
+            log::warn!("{command:?} command failed: {e}");
+            Err(e)
         }
     }
 }
@@ -238,6 +242,9 @@ pub(crate) mod testing {
         pub mode: Mode,
         /// The first N start commands fail, to exercise the resend loop.
         pub fail_first: usize,
+        /// A start's file appears this long after the command, as when
+        /// ShadowPlay is slow to create it.
+        pub late_by: Option<Duration>,
     }
 
     impl FakeChannel {
@@ -247,6 +254,7 @@ pub(crate) mod testing {
                 folder: folder.map(Path::to_path_buf),
                 mode,
                 fail_first: 0,
+                late_by: None,
             }
         }
 
@@ -260,11 +268,22 @@ pub(crate) mod testing {
         fn create_recording(&self) {
             let Some(folder) = &self.folder else { return };
             let path = folder.join("DefaultShadowPlay.mp4");
-            if !path.exists() {
-                fs::write(&path, vec![b'x'; 1024]).unwrap();
-                let file = File::options().write(true).open(&path).unwrap();
-                file.set_modified(SystemTime::now() + Duration::from_secs(5))
-                    .unwrap();
+            let write = move || {
+                if !path.exists() {
+                    fs::write(&path, vec![b'x'; 1024]).unwrap();
+                    let file = File::options().write(true).open(&path).unwrap();
+                    file.set_modified(SystemTime::now() + Duration::from_secs(5))
+                        .unwrap();
+                }
+            };
+            match self.late_by {
+                Some(delay) => {
+                    thread::spawn(move || {
+                        thread::sleep(delay);
+                        write();
+                    });
+                }
+                None => write(),
             }
         }
     }
