@@ -12,6 +12,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use recorder_core::activity;
 use serde::Serialize;
 use tauri::AppHandle;
 use tauri_specta::Event;
@@ -96,8 +97,9 @@ impl log::Log for Activity {
         if !self.enabled(record.metadata()) {
             return;
         }
+        let now = SystemTime::now();
         let entry = ActivityEntry {
-            time: SystemTime::now()
+            time: now
                 .duration_since(UNIX_EPOCH)
                 .map_or(0.0, |d| d.as_millis() as f64),
             level: match record.level() {
@@ -109,8 +111,12 @@ impl log::Log for Activity {
         };
 
         if let Some(file) = self.file.lock().unwrap().as_mut() {
-            let seconds = (entry.time / 1000.0) as u64;
-            let _ = writeln!(file, "{seconds} {:?} {}", entry.level, entry.message);
+            let level = match entry.level {
+                Level::Info => "info",
+                Level::Warning => "warning",
+                Level::Error => "error",
+            };
+            let _ = writeln!(file, "{}", activity::log_line(now, level, &entry.message));
         }
         {
             let mut recent = self.recent.lock().unwrap();

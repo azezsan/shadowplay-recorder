@@ -5,6 +5,7 @@
 //! Only `platform` touches the operating system directly. The rest builds and
 //! is tested on any OS, with `engine` taking its OS access through `Host`.
 
+pub mod activity;
 pub mod engine;
 pub mod game;
 pub mod overlay;
