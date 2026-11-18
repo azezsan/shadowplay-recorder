@@ -16,6 +16,12 @@ export const commands = {
 	 *  as `ActivityAdded` events.
 	 */
 	getRecentActivity: (options?: InvokeOptions) => __TAURI_INVOKE<ActivityEntry[]>("get_recent_activity", undefined, options),
+	/**
+	 *  The setup checklist, checked now. It probes the debug port and reads
+	 *  Steam's files, so it runs off the main thread; the window calls it on a
+	 *  timer while it is visible.
+	 */
+	getSetupReport: (options?: InvokeOptions) => __TAURI_INVOKE<SetupReport>("get_setup_report", undefined, options),
 };
 
 /** Events */
@@ -35,7 +41,33 @@ export type ActivityEntry = {
 	message: string,
 };
 
+export type ConsoleLogState = "ready" | 
+/**  The game was not found in any Steam library. */
+"gameNotFound" | 
+/**  The game's launch options lack the console-log option. */
+"optionMissing";
+
+export type FolderState = "ready" | "notSet" | 
+/**  A folder is set but does not exist. */
+"missing";
+
 export type Level = "info" | "warning" | "error";
+
+export type OverlayState = "ready" | 
+/**  The NVIDIA App's overlay config file was not found. */
+"nvidiaAppMissing" | 
+/**
+ *  The debug-port switch is not in the overlay config. Fixable by the
+ *  app, with an administrator prompt.
+ */
+"switchMissing" | 
+/**
+ *  The switch is there but nothing listens: the NVIDIA App needs a full
+ *  restart, or is not running.
+ */
+"notReachable" | 
+/**  The port answers but the overlay page is not loaded yet. */
+"noRecordPage";
 
 /**  What the session is doing, for display. */
 export type Phase = 
@@ -54,6 +86,12 @@ export type Phase =
 "recording" | 
 /**  The match ended and the recording is kept running for the stop delay. */
 "finishing";
+
+export type SetupReport = {
+	overlay: OverlayState,
+	consoleLog: ConsoleLogState,
+	recordingsFolder: FolderState,
+};
 
 /**  What the app is doing right now, for the status line and the tray. */
 export type Status = {

@@ -2,7 +2,9 @@
 //! `specta_builder`, which is what generates its TypeScript binding.
 
 use recorder_core::engine::Status;
-use tauri::State;
+use recorder_core::game::DEADLOCK;
+use recorder_core::setup::{self, SetupReport};
+use tauri::{AppHandle, Manager, State};
 
 use crate::AppState;
 use crate::activity::{self, ActivityEntry};
@@ -21,4 +23,16 @@ pub fn get_status(state: State<'_, AppState>) -> Status {
 #[specta::specta]
 pub fn get_recent_activity() -> Vec<ActivityEntry> {
     activity::install().recent()
+}
+
+/// The setup checklist, checked now. It probes the debug port and reads
+/// Steam's files, so it runs off the main thread; the window calls it on a
+/// timer while it is visible.
+#[tauri::command]
+#[specta::specta]
+pub async fn get_setup_report(app: AppHandle) -> SetupReport {
+    let settings = app.state::<AppState>().settings.read().unwrap().clone();
+    tauri::async_runtime::spawn_blocking(move || setup::check(&settings, &DEADLOCK))
+        .await
+        .expect("the setup check panicked")
 }
