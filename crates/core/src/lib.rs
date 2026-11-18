@@ -18,3 +18,4 @@ pub mod settings;
 pub mod setup;
 pub mod steam;
 pub mod tail;
+pub mod update;

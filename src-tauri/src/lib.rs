@@ -11,6 +11,7 @@
 
 mod activity;
 mod commands;
+mod update;
 
 use std::path::PathBuf;
 use std::sync::{Mutex, RwLock};
@@ -52,7 +53,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
             commands::get_setup_report,
             commands::get_settings,
             commands::save_settings,
-            commands::pick_recordings_folder
+            commands::pick_recordings_folder,
+            commands::get_version
         ])
         .events(collect_events![StatusChanged, activity::ActivityAdded])
 }
@@ -101,6 +103,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
@@ -132,6 +135,7 @@ pub fn run() {
 
             let handle = app.handle().clone();
             thread::spawn(move || run_engine(handle));
+            update::start(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
