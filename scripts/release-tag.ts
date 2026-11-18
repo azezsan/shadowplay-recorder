@@ -27,7 +27,7 @@ export function checkReleaseTag(tag: string, files: ReleaseFiles): TagCheck {
   return { ok: true, version };
 }
 
-function workspaceVersion(cargoToml: string): string | undefined {
+export function workspaceVersion(cargoToml: string): string | undefined {
   let inTable = false;
   for (const line of cargoToml.split("\n")) {
     const header = /^\s*\[([^\]]+)\]\s*$/.exec(line);

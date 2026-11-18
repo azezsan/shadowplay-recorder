@@ -31,6 +31,7 @@ Nothing is hosted. The repo is `azezsan/shadowplay-recorder` on GitHub, owned by
 - `pnpm dev` runs the app with live reload.
 - `pnpm format` formats everything.
 - `pnpm merge <pr>` merges a PR once its checks pass and waits for `main` to go green.
+- `pnpm release` tags `main` with its app version, waits for the release build, and checks the published assets.
 
 ## Rules that hold everywhere
 
@@ -62,15 +63,14 @@ A local `pnpm tauri build` needs `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_
 
 ### Cutting a release
 
-1. On a branch, bump `version` in the root `Cargo.toml`, run `cargo check` to refresh `Cargo.lock`, and merge the PR as usual.
-2. Tag the merge commit on `main` and push the tag:
-   ```sh
-   git switch main && git pull --ff-only
-   git tag v0.2.0 && git push origin v0.2.0
-   gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-   ```
+An agent cuts a release when the owner asks for one.
 
-The workflow refuses a tag that differs from the version, a commit that is not on `main`, and the placeholder updater key.
+1. On a branch, bump `version` in the root `Cargo.toml`, run `cargo check` to refresh `Cargo.lock`, and merge the PR with `pnpm merge <pr>`. Skip this for a version that has never been tagged.
+2. Run `pnpm release`. It tags the tip of `origin/main` as `v<version>`, pushes the tag, watches `.github/workflows/release.yml`, and fails unless the release has the installer, its `.sig` and `latest.json`.
+
+The script refuses a version that is already tagged. The workflow refuses a tag that differs from the version, a commit that is not on `main`, and the placeholder updater key.
+
+If the build fails before anything is published, fix it in a PR, then move the tag with `git push origin :refs/tags/v<version> && git tag -d v<version>` and run `pnpm release` again. Once a release is published, never move its tag: fix forward as below.
 
 ### Undoing a bad release
 
@@ -84,7 +84,7 @@ gh release edit v0.2.0 --prerelease
 
 ### One-time setup
 
-Done once per repo, by the owner, in this order (branch protection needs the repo public on a free plan).
+Already done; kept for a new repo or a lost key. The steps run in this order, because branch protection needs the repo public on a free plan.
 
 1. Scan the full history for secrets: `gitleaks git . --no-banner --redact`. It must report no leaks.
 2. Make the repo public: `gh repo edit azezsan/shadowplay-recorder --visibility public --accept-visibility-change-consequences`.
@@ -99,14 +99,14 @@ Done once per repo, by the owner, in this order (branch protection needs the rep
    ```sh
    dir=$(mktemp -d) && pass=$(openssl rand -base64 32)
    pnpm tauri signer generate --ci -p "$pass" -w "$dir/updater.key"
-   security add-generic-password -U -a shadowplay-recorder -s TAURI_SIGNING_PRIVATE_KEY -w "$(cat "$dir/updater.key")"
-   security add-generic-password -U -a shadowplay-recorder -s TAURI_SIGNING_PRIVATE_KEY_PASSWORD -w "$pass"
+   security add-generic-password -U -a azezsan -s shadowplay-recorder-updater-private-key -w "$(cat "$dir/updater.key")"
+   security add-generic-password -U -a azezsan -s shadowplay-recorder-updater-key-password -w "$pass"
    gh secret set TAURI_SIGNING_PRIVATE_KEY --repo azezsan/shadowplay-recorder < "$dir/updater.key"
    printf %s "$pass" | gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD --repo azezsan/shadowplay-recorder
    cat "$dir/updater.key.pub"   # goes into plugins.updater.pubkey, via a PR
    rm -rf "$dir"; unset pass
    ```
-   To read the key back later: `security find-generic-password -a shadowplay-recorder -s TAURI_SIGNING_PRIVATE_KEY -w`.
+   This was done on 2026-11-18. To read the key and password back: `security find-generic-password -a azezsan -s shadowplay-recorder-updater-private-key -w` and `... -s shadowplay-recorder-updater-key-password -w`.
 
 ## Git flow
 

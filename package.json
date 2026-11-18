@@ -17,7 +17,8 @@
     "tauri": "tauri",
     "format": "prettier --write . && cargo fmt --all",
     "check": "node scripts/check.ts",
-    "merge": "node scripts/merge.ts"
+    "merge": "node scripts/merge.ts",
+    "release": "node scripts/release.ts"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
