@@ -25,11 +25,16 @@ const PROCESS_POLL_INTERVAL: Duration = Duration::from_secs(3);
 /// Wait after the game closes before applying the size cap.
 const CLEANUP_DELAY: Duration = Duration::from_secs(30);
 const MISSING_LOG_WARNING_AFTER: Duration = Duration::from_secs(30);
+/// How often the overlay config is re-read for the debug switch, which an
+/// NVIDIA App update can remove while the app runs.
+const SWITCH_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 /// What the engine needs to ask the operating system.
 pub trait Host {
     fn is_game_running(&self, game: &GameProfile) -> bool;
     fn steam_root(&self) -> Option<PathBuf>;
+    /// True if the overlay config exists and lacks the debug switch.
+    fn overlay_switch_missing(&self) -> bool;
 }
 
 /// The real operating system.
@@ -42,6 +47,10 @@ impl Host for SystemHost {
 
     fn steam_root(&self) -> Option<PathBuf> {
         platform::steam_root()
+    }
+
+    fn overlay_switch_missing(&self) -> bool {
+        setup::overlay_switch_missing()
     }
 }
 
@@ -88,6 +97,11 @@ pub struct Engine<C: RecordChannel, W: GameWindow, H: Host> {
     log_missing_since: Option<Duration>,
     warned_log_missing: bool,
     warned_no_folder: bool,
+    next_switch_check: Duration,
+    /// Whether the debug switch was missing at the last check; `None`
+    /// before the first.
+    switch_missing: Option<bool>,
+    window_requested: bool,
     test_recording_timing: TestRecordingTiming,
 }
 
@@ -107,6 +121,9 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             log_missing_since: None,
             warned_log_missing: false,
             warned_no_folder: false,
+            next_switch_check: Duration::ZERO,
+            switch_missing: None,
+            window_requested: false,
             test_recording_timing: TestRecordingTiming::default(),
         };
         engine.apply_settings(Settings::default());
@@ -198,6 +215,28 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
         result
     }
 
+    /// True, once, if the window should open to show something the user must
+    /// fix: the overlay's debug switch has disappeared since the last check.
+    /// A switch already missing at startup is the startup check's to show.
+    pub fn take_window_request(&mut self) -> bool {
+        std::mem::take(&mut self.window_requested)
+    }
+
+    fn check_switch(&mut self, now: Duration) {
+        if now < self.next_switch_check {
+            return;
+        }
+        self.next_switch_check = now + SWITCH_CHECK_INTERVAL;
+        let missing = self.host.overlay_switch_missing();
+        if self.switch_missing == Some(false) && missing {
+            log::warn!(
+                "the overlay's debug switch has disappeared; an NVIDIA App update may have removed it"
+            );
+            self.window_requested = true;
+        }
+        self.switch_missing = Some(missing);
+    }
+
     /// Readies the app to quit: a recording in progress is stopped and named
     /// now, and a delayed stop is sent now, so quitting never leaves
     /// ShadowPlay recording. Blocks until the file is named.
@@ -210,6 +249,7 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
 
     pub fn step(&mut self, now: Duration, wall: SystemTime) -> Status {
         self.take_up_folder();
+        self.check_switch(now);
         if now >= self.next_process_poll {
             self.next_process_poll = now + PROCESS_POLL_INTERVAL;
             let exited = self
@@ -298,11 +338,16 @@ mod tests {
 
     struct FakeHost {
         running: Rc<Cell<bool>>,
+        switch_missing: Rc<Cell<bool>>,
     }
 
     impl Host for FakeHost {
         fn is_game_running(&self, _game: &GameProfile) -> bool {
             self.running.get()
+        }
+
+        fn overlay_switch_missing(&self) -> bool {
+            self.switch_missing.get()
         }
 
         fn steam_root(&self) -> Option<PathBuf> {
@@ -330,6 +375,7 @@ mod tests {
         engine: Engine<FakeChannel, FakeWindow, FakeHost>,
         settings: Settings,
         running: Rc<Cell<bool>>,
+        switch_missing: Rc<Cell<bool>>,
         focuses: Rc<Cell<u32>>,
         log: PathBuf,
         recordings: PathBuf,
@@ -345,10 +391,12 @@ mod tests {
             let log = dir.path().join("console.log");
             fs::write(&log, "old session line\n").unwrap();
             let running = Rc::new(Cell::new(false));
+            let switch_missing = Rc::new(Cell::new(false));
 
             let channel = FakeChannel::new(Some(&recordings), Mode::Ok);
             let host = FakeHost {
                 running: running.clone(),
+                switch_missing: switch_missing.clone(),
             };
             let focuses = Rc::new(Cell::new(0));
             let window = FakeWindow {
@@ -379,6 +427,7 @@ mod tests {
                 engine,
                 settings,
                 running,
+                switch_missing,
                 focuses,
                 log,
                 recordings,
@@ -535,6 +584,39 @@ mod tests {
         f.write_log("Lobby 6 for Match 2 destroyed\n");
         f.run(1);
         assert!(moved.join("2.mp4").exists());
+    }
+
+    #[test]
+    fn asks_for_the_window_once_when_the_debug_switch_disappears() {
+        let mut f = Fixture::new(true);
+        f.run(SWITCH_CHECK_INTERVAL.as_secs() + 1);
+        assert!(!f.engine.take_window_request(), "the switch is there");
+
+        // An NVIDIA App update removes the switch while the app runs.
+        f.switch_missing.set(true);
+        f.run(SWITCH_CHECK_INTERVAL.as_secs());
+        assert!(f.engine.take_window_request());
+        assert!(!f.engine.take_window_request(), "asked once");
+        f.run(SWITCH_CHECK_INTERVAL.as_secs() * 2);
+        assert!(
+            !f.engine.take_window_request(),
+            "still missing, not asked again"
+        );
+
+        // Fixed, then removed again by the next update.
+        f.switch_missing.set(false);
+        f.run(SWITCH_CHECK_INTERVAL.as_secs());
+        f.switch_missing.set(true);
+        f.run(SWITCH_CHECK_INTERVAL.as_secs());
+        assert!(f.engine.take_window_request());
+    }
+
+    #[test]
+    fn a_switch_missing_at_startup_is_left_to_the_startup_check() {
+        let mut f = Fixture::new(true);
+        f.switch_missing.set(true);
+        f.run(SWITCH_CHECK_INTERVAL.as_secs() * 2);
+        assert!(!f.engine.take_window_request());
     }
 
     #[test]

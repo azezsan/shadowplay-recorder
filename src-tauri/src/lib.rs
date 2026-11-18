@@ -105,6 +105,11 @@ fn run_engine(app: AppHandle, requests: Receiver<EngineRequest>) {
         engine.apply_settings(state.settings.read().unwrap().clone());
         let status = engine.step(started.elapsed(), SystemTime::now());
         publish(&app, &status);
+        // The overlay's debug switch disappeared; the setup checklist in
+        // the window shows the fix.
+        if engine.take_window_request() {
+            tray::show_window(&app);
+        }
         for request in requests.try_iter() {
             match request {
                 // The engine refuses the test during a match.
