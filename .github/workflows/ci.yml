@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    # The app only runs on Windows, and its platform layer only compiles for
+    # real there.
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v5
+        with:
+          node-version-file: package.json
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Install gitleaks
+        run: |
+          gh release download "v$GITLEAKS_VERSION" --repo gitleaks/gitleaks \
+            --pattern "gitleaks_${GITLEAKS_VERSION}_windows_x64.zip" --dir "$RUNNER_TEMP"
+          unzip -q "$RUNNER_TEMP/gitleaks_${GITLEAKS_VERSION}_windows_x64.zip" -d "$RUNNER_TEMP/gitleaks"
+          echo "$RUNNER_TEMP/gitleaks" >> "$GITHUB_PATH"
+      - run: pnpm check

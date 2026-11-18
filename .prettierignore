@@ -1,0 +1,11 @@
+dist
+target
+pnpm-lock.yaml
+src/lib/bindings.ts
+src/lib/components/ui
+src/lib/utils.ts
+src/app.css
+src-tauri/gen
+components.json
+
+.svelte-check

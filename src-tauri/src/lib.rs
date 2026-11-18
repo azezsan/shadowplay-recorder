@@ -1,0 +1,120 @@
+//! The desktop shell around `recorder-core`: it runs the engine on a
+//! background thread, keeps the latest status for the window, and exposes
+//! commands and events to the UI.
+//!
+//! The UI never calls `invoke` by name. `specta_builder` is the single list of
+//! commands and events, and `src/lib/bindings.ts` is generated from it by the
+//! `export_bindings` test.
+
+mod activity;
+mod commands;
+
+use std::sync::{Mutex, RwLock};
+use std::thread;
+use std::time::{Instant, SystemTime};
+
+use recorder_core::engine::{Engine, STEP_INTERVAL, Status, SystemHost};
+use recorder_core::game::DEADLOCK;
+use recorder_core::overlay::Overlay;
+use recorder_core::platform::ProcessWindow;
+use recorder_core::session::Phase;
+use recorder_core::settings::Settings;
+use serde::Serialize;
+use tauri::{AppHandle, Manager};
+use tauri_specta::{Builder, Event, collect_commands, collect_events};
+
+/// Makes the app patch the NVIDIA overlay config and exit. See `main`.
+pub const PATCH_OVERLAY_FLAG: &str = "--patch-overlay";
+
+/// Emitted whenever the status changes.
+#[derive(Debug, Clone, Serialize, specta::Type, Event)]
+pub struct StatusChanged(pub Status);
+
+pub struct AppState {
+    pub settings: RwLock<Settings>,
+    pub status: Mutex<Status>,
+}
+
+fn specta_builder() -> Builder<tauri::Wry> {
+    Builder::<tauri::Wry>::new()
+        .disable_serde_phases()
+        .commands(collect_commands![
+            commands::get_status,
+            commands::get_recent_activity
+        ])
+        .events(collect_events![StatusChanged, activity::ActivityAdded])
+}
+
+/// Steps the engine once a second for the life of the app.
+fn run_engine(app: AppHandle) {
+    let overlay = Overlay::default();
+    let window = ProcessWindow {
+        process: DEADLOCK.process,
+    };
+    let mut engine = Engine::new(&DEADLOCK, overlay, window, SystemHost);
+    let started = Instant::now();
+    loop {
+        let state = app.state::<AppState>();
+        engine.apply_settings(state.settings.read().unwrap().clone());
+        let status = engine.step(started.elapsed(), SystemTime::now());
+        let changed = {
+            let mut current = state.status.lock().unwrap();
+            let changed = *current != status;
+            *current = status.clone();
+            changed
+        };
+        if changed {
+            let _ = StatusChanged(status).emit(&app);
+        }
+        thread::sleep(STEP_INTERVAL);
+    }
+}
+
+pub fn run() {
+    let activity = activity::install();
+    let builder = specta_builder();
+
+    tauri::Builder::default()
+        .invoke_handler(builder.invoke_handler())
+        .setup(move |app| {
+            builder.mount_events(app);
+            if let Ok(folder) = app.path().app_log_dir() {
+                activity.write_to(&folder);
+            }
+            activity.emit_to(app.handle().clone());
+            log::info!("ShadowPlay Recorder {} started", app.package_info().version);
+
+            let settings = app
+                .path()
+                .app_config_dir()
+                .map(|folder| Settings::load(&folder.join("settings.json")))
+                .unwrap_or_default();
+            app.manage(AppState {
+                settings: RwLock::new(settings),
+                status: Mutex::new(Status {
+                    phase: Phase::Idle,
+                    match_id: None,
+                }),
+            });
+
+            let handle = app.handle().clone();
+            thread::spawn(move || run_engine(handle));
+            Ok(())
+        })
+        .run(tauri::generate_context!())
+        .expect("failed to start the app");
+}
+
+#[cfg(test)]
+mod tests {
+    use specta_typescript::Typescript;
+
+    /// Regenerates the TypeScript bindings. `pnpm check` runs this and fails
+    /// if the committed file changed.
+    #[test]
+    fn export_bindings() {
+        super::specta_builder()
+            .export(Typescript::default(), "../src/lib/bindings.ts")
+            .expect("failed to export the TypeScript bindings");
+    }
+}
