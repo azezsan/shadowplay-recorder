@@ -12,6 +12,7 @@
 mod activity;
 mod commands;
 
+use std::path::PathBuf;
 use std::sync::{Mutex, RwLock};
 use std::thread;
 use std::time::{Instant, SystemTime};
@@ -22,6 +23,7 @@ use recorder_core::overlay::Overlay;
 use recorder_core::platform::ProcessWindow;
 use recorder_core::session::Phase;
 use recorder_core::settings::Settings;
+use recorder_core::setup::default_recordings_folder;
 use serde::Serialize;
 use tauri::{AppHandle, Manager};
 use tauri_specta::{Builder, Event, collect_commands, collect_events};
@@ -35,6 +37,9 @@ pub struct StatusChanged(pub Status);
 
 pub struct AppState {
     pub settings: RwLock<Settings>,
+    /// `None` when the OS gave no config folder; settings then last only
+    /// until the app quits.
+    pub settings_path: Option<PathBuf>,
     pub status: Mutex<Status>,
 }
 
@@ -44,7 +49,10 @@ fn specta_builder() -> Builder<tauri::Wry> {
         .commands(collect_commands![
             commands::get_status,
             commands::get_recent_activity,
-            commands::get_setup_report
+            commands::get_setup_report,
+            commands::get_settings,
+            commands::save_settings,
+            commands::pick_recordings_folder
         ])
         .events(collect_events![StatusChanged, activity::ActivityAdded])
 }
@@ -92,6 +100,7 @@ pub fn run() {
     let builder = specta_builder();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(builder.invoke_handler())
         .setup(move |app| {
             builder.mount_events(app);
@@ -101,13 +110,20 @@ pub fn run() {
             activity.emit_to(app.handle().clone());
             log::info!("ShadowPlay Recorder {} started", app.package_info().version);
 
-            let settings = app
+            let settings_path = app
                 .path()
                 .app_config_dir()
-                .map(|folder| Settings::load(&folder.join("settings.json")))
+                .ok()
+                .map(|folder| folder.join("settings.json"));
+            let settings = settings_path
+                .as_deref()
+                .map(|path| {
+                    Settings::load_or_first_launch(path, || default_recordings_folder(&DEADLOCK))
+                })
                 .unwrap_or_default();
             app.manage(AppState {
                 settings: RwLock::new(settings),
+                settings_path,
                 status: Mutex::new(Status {
                     phase: Phase::Idle,
                     match_id: None,

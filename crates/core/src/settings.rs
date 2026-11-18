@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -64,6 +64,28 @@ impl Settings {
         }
     }
 
+    /// Like `load`, but on first launch (no file yet) starts from defaults
+    /// with the suggested recordings folder, and saves that.
+    pub fn load_or_first_launch(
+        path: &Path,
+        suggested_folder: impl FnOnce() -> Option<PathBuf>,
+    ) -> Self {
+        if path.exists() {
+            return Self::load(path);
+        }
+        let settings = Self {
+            recordings_folder: suggested_folder().map(|f| f.to_string_lossy().into_owned()),
+            ..Self::default()
+        };
+        if let Some(folder) = &settings.recordings_folder {
+            log::info!("first launch: using ShadowPlay's usual folder {folder}");
+        }
+        if let Err(e) = settings.save(path) {
+            log::warn!("could not save the settings file: {e}");
+        }
+        settings
+    }
+
     pub fn save(&self, path: &Path) -> io::Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -96,6 +118,28 @@ mod tests {
 
         fs::write(&path, "not json").unwrap();
         assert_eq!(Settings::load(&path), Settings::default());
+    }
+
+    #[test]
+    fn first_launch_fills_in_the_suggested_folder_and_saves_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let suggested = dir.path().join("Videos").join("NVIDIA").join("Deadlock");
+
+        let settings = Settings::load_or_first_launch(&path, || Some(suggested.clone()));
+        let expected = Some(suggested.to_string_lossy().into_owned());
+        assert_eq!(settings.recordings_folder, expected);
+        assert_eq!(Settings::load(&path).recordings_folder, expected);
+    }
+
+    #[test]
+    fn a_later_launch_keeps_the_saved_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        Settings::default().save(&path).unwrap();
+
+        let settings = Settings::load_or_first_launch(&path, || Some(dir.path().to_path_buf()));
+        assert_eq!(settings.recordings_folder, None);
     }
 
     #[test]

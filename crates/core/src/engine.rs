@@ -211,10 +211,14 @@ mod tests {
         }
     }
 
-    struct NoWindow;
+    /// Always in the foreground; counts the times it was focused.
+    struct FakeWindow {
+        focuses: Rc<Cell<u32>>,
+    }
 
-    impl GameWindow for NoWindow {
+    impl GameWindow for FakeWindow {
         fn focus(&mut self) -> bool {
+            self.focuses.set(self.focuses.get() + 1);
             true
         }
 
@@ -224,8 +228,10 @@ mod tests {
     }
 
     struct Fixture {
-        engine: Engine<FakeChannel, NoWindow, FakeHost>,
+        engine: Engine<FakeChannel, FakeWindow, FakeHost>,
+        settings: Settings,
         running: Rc<Cell<bool>>,
+        focuses: Rc<Cell<u32>>,
         log: PathBuf,
         recordings: PathBuf,
         now: Duration,
@@ -245,14 +251,19 @@ mod tests {
             let host = FakeHost {
                 running: running.clone(),
             };
-            let mut engine = Engine::new(&DEADLOCK, channel, NoWindow, host);
-            engine.apply_settings(Settings {
+            let focuses = Rc::new(Cell::new(0));
+            let window = FakeWindow {
+                focuses: focuses.clone(),
+            };
+            let mut engine = Engine::new(&DEADLOCK, channel, window, host);
+            let settings = Settings {
                 recordings_folder: with_folder.then(|| recordings.to_string_lossy().into()),
                 console_log: Some(log.to_string_lossy().into()),
                 stop_delay_seconds: 0,
                 max_size_gb: 1.0,
                 ..Settings::default()
-            });
+            };
+            engine.apply_settings(settings.clone());
             let session = engine.session_mut();
             session.config.start_delay = Duration::ZERO;
             session.recorder_mut().set_timing(RenameTiming {
@@ -262,7 +273,9 @@ mod tests {
             });
             Self {
                 engine,
+                settings,
                 running,
+                focuses,
                 log,
                 recordings,
                 now: Duration::ZERO,
@@ -278,6 +291,13 @@ mod tests {
                 status = self.engine.step(self.now, SystemTime::now());
             }
             status
+        }
+
+        /// Changes the settings the way the shell does: handing the engine
+        /// the whole new value before its next step.
+        fn change_settings(&mut self, change: impl FnOnce(&mut Settings)) {
+            change(&mut self.settings);
+            self.engine.apply_settings(self.settings.clone());
         }
 
         fn write_log(&self, text: &str) {
@@ -312,6 +332,42 @@ mod tests {
         assert_eq!(f.run(1).phase, Phase::GameRunning);
         assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
         assert!(f.recordings.join("81038409.mp4").exists());
+    }
+
+    #[test]
+    fn uses_changed_settings_without_a_restart() {
+        let mut f = Fixture::new(true);
+        f.running.set(true);
+        f.run(3);
+        f.write_log("Lobby 5 for Match 1 created\n[Client] Map: \"start\"\n");
+        f.run(2);
+        f.write_log("Lobby 5 for Match 1 destroyed\n");
+        f.run(1);
+        assert_eq!(f.focuses.get(), 1);
+        assert!(f.recordings.join("1.mp4").exists());
+
+        // The player moves the recordings folder, lengthens the stop delay
+        // and turns focusing off while the app keeps running.
+        let moved = f.recordings.parent().unwrap().join("moved");
+        fs::create_dir(&moved).unwrap();
+        f.change_settings(|s| {
+            s.recordings_folder = Some(moved.to_string_lossy().into());
+            s.stop_delay_seconds = 5;
+            s.focus_on_match_start = false;
+        });
+        f.engine.session_mut().recorder_mut().channel_mut().folder = Some(moved.clone());
+
+        f.write_log("Lobby 6 for Match 2 created\n[Client] Map: \"start\"\n");
+        assert_eq!(f.run(2).phase, Phase::Recording);
+        assert_eq!(f.focuses.get(), 1, "focusing is off now");
+
+        f.write_log("Lobby 6 for Match 2 destroyed\n");
+        assert_eq!(f.run(5).phase, Phase::Finishing);
+        assert_eq!(f.sent().last(), Some(&RecordCommand::Start));
+        assert_eq!(f.run(1).phase, Phase::GameRunning);
+        assert_eq!(f.sent().last(), Some(&RecordCommand::Stop));
+        assert!(moved.join("2.mp4").exists());
+        assert!(!f.recordings.join("2.mp4").exists());
     }
 
     #[test]
