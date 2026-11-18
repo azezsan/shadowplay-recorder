@@ -42,6 +42,12 @@ export const commands = {
 	 *  Windows prompt. The error is a sentence for the user.
 	 */
 	repairOverlay: (options?: InvokeOptions) => __TAURI_INVOKE<null>("repair_overlay", undefined, options),
+	/**
+	 *  Records a few seconds to prove the overlay, the record command and the
+	 *  recordings folder work together, and returns the recorded file's path.
+	 *  The engine thread runs it between steps and refuses it during a match.
+	 */
+	testRecording: (options?: InvokeOptions) => __TAURI_INVOKE<string>("test_recording", undefined, options),
 };
 
 /** Events */
@@ -136,6 +142,27 @@ export type Status = {
 
 /**  Emitted whenever the status changes. */
 export type StatusChanged = Status;
+
+/**  Why a test recording failed or was refused. */
+export type TestRecordingError = 
+/**
+ *  The recorder is in a match or recording one; the test would get in
+ *  its way.
+ */
+{ kind: "busy"; phase: Phase } | 
+/**  No recordings folder is set, so the result could not be checked. */
+{ kind: "noRecordingsFolder" } | 
+/**  The overlay's debug port could not be reached; nothing was sent. */
+{ kind: "overlayUnreachable"; detail: string } | 
+/**  The overlay answered and refused the start command. */
+{ kind: "startRejected"; detail: string } | 
+/**
+ *  The start was sent but no file appeared in the recordings folder,
+ *  which usually means ShadowPlay saves somewhere else.
+ */
+{ kind: "noRecordingAppeared"; folder: string } | 
+/**  A recording started but the stop failed, so it may still be running. */
+{ kind: "stopFailed"; recording: string; detail: string };
 
 /* Tauri Specta runtime */
 type EventEmit<T> = [T] extends [null] ? () => Promise<void> : (payload: T) => Promise<void>;
