@@ -10,7 +10,7 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent}
 use tauri::{AppHandle, Manager, Window, WindowEvent};
 use tauri_plugin_opener::OpenerExt;
 
-use crate::AppState;
+use crate::{AppState, EngineRequest};
 
 const TRAY_ID: &str = "main";
 const MAIN_WINDOW: &str = "main";
@@ -42,10 +42,7 @@ pub fn install(app: &AppHandle, status: &Status) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             OPEN => show_window(app),
             OPEN_RECORDINGS => open_recordings_folder(app),
-            QUIT => {
-                log::info!("quit from the tray");
-                app.exit(0);
-            }
+            QUIT => quit(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| {
@@ -86,6 +83,22 @@ pub fn on_window_event(window: &Window, event: &WindowEvent) {
     if let WindowEvent::CloseRequested { api, .. } = event {
         api.prevent_close();
         let _ = window.hide();
+    }
+}
+
+/// Quits through the engine thread, which first stops or saves a recording
+/// in progress and then exits the app.
+fn quit(app: &AppHandle) {
+    log::info!("quit from the tray");
+    let sent = app
+        .state::<AppState>()
+        .engine_requests
+        .lock()
+        .unwrap()
+        .send(EngineRequest::Quit);
+    if sent.is_err() {
+        // The engine thread is gone, so nothing can be recording.
+        app.exit(0);
     }
 }
 

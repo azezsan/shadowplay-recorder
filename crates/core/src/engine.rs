@@ -176,6 +176,16 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
         result
     }
 
+    /// Readies the app to quit: a recording in progress is stopped and named
+    /// now, and a delayed stop is sent now, so quitting never leaves
+    /// ShadowPlay recording. Blocks until the file is named.
+    pub fn quit(&mut self) {
+        if self.session.phase() != Phase::Idle {
+            log::info!("quitting: saving what is in progress");
+        }
+        self.session.end_now();
+    }
+
     pub fn step(&mut self, now: Duration, wall: SystemTime) -> Status {
         if now >= self.next_process_poll {
             self.next_process_poll = now + PROCESS_POLL_INTERVAL;
@@ -432,6 +442,44 @@ mod tests {
         assert_eq!(f.sent().last(), Some(&RecordCommand::Stop));
         assert!(moved.join("2.mp4").exists());
         assert!(!f.recordings.join("2.mp4").exists());
+    }
+
+    #[test]
+    fn quitting_mid_match_stops_and_names_the_recording() {
+        let mut f = Fixture::new(true);
+        f.running.set(true);
+        f.run(3);
+        f.write_log("Lobby 5 for Match 7 created\n[Client] Map: \"start\"\n");
+        assert_eq!(f.run(2).phase, Phase::Recording);
+
+        f.engine.quit();
+        assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
+        assert!(f.recordings.join("7.mp4").exists());
+    }
+
+    #[test]
+    fn quitting_during_the_stop_delay_sends_the_stop_now() {
+        let mut f = Fixture::new(true);
+        f.change_settings(|s| s.stop_delay_seconds = 30);
+        f.running.set(true);
+        f.run(3);
+        f.write_log("Lobby 5 for Match 7 created\n[Client] Map: \"start\"\n");
+        f.run(2);
+        f.write_log("Lobby 5 for Match 7 destroyed\n");
+        assert_eq!(f.run(1).phase, Phase::Finishing);
+
+        f.engine.quit();
+        assert_eq!(f.sent(), [RecordCommand::Start, RecordCommand::Stop]);
+        assert!(f.recordings.join("7.mp4").exists());
+    }
+
+    #[test]
+    fn quitting_out_of_a_match_sends_nothing() {
+        let mut f = Fixture::new(true);
+        f.running.set(true);
+        assert_eq!(f.run(3).phase, Phase::GameRunning);
+        f.engine.quit();
+        assert!(f.sent().is_empty());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::activity::{self, ActivityEntry};
-use crate::{AppState, PATCH_OVERLAY_FLAG};
+use crate::{AppState, EngineRequest, PATCH_OVERLAY_FLAG};
 
 /// The current status, for a window that has just opened. Later changes
 /// arrive as `StatusChanged` events.
@@ -125,10 +125,10 @@ pub async fn repair_overlay() -> Result<(), String> {
 pub async fn test_recording(app: AppHandle) -> Result<String, TestRecordingError> {
     let (reply, result) = mpsc::channel();
     app.state::<AppState>()
-        .test_requests
+        .engine_requests
         .lock()
         .unwrap()
-        .send(reply)
+        .send(EngineRequest::TestRecording(reply))
         .expect("the engine thread has stopped");
     tauri::async_runtime::spawn_blocking(move || result.recv())
         .await

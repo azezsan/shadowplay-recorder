@@ -47,13 +47,17 @@ pub struct AppState {
     /// until the app quits.
     pub settings_path: Option<PathBuf>,
     pub status: Mutex<Status>,
-    /// Asks the engine thread for a test recording; it answers on the
-    /// enclosed sender once the test is done.
-    pub test_requests: Mutex<Sender<TestRequest>>,
+    /// Asks the engine thread for something between its steps.
+    pub engine_requests: Mutex<Sender<EngineRequest>>,
 }
 
-/// Where the engine thread sends a test recording's result.
-pub type TestRequest = Sender<Result<String, TestRecordingError>>;
+/// What the engine thread is asked to do between steps.
+pub enum EngineRequest {
+    /// Run a test recording and send its result on the enclosed sender.
+    TestRecording(Sender<Result<String, TestRecordingError>>),
+    /// Stop or save what is in progress, then exit the app.
+    Quit,
+}
 
 fn specta_builder() -> Builder<tauri::Wry> {
     Builder::<tauri::Wry>::new()
@@ -87,9 +91,9 @@ pub fn export_bindings() {
         .expect("failed to export the TypeScript bindings");
 }
 
-/// Steps the engine once a second for the life of the app, and runs test
-/// recordings between steps.
-fn run_engine(app: AppHandle, test_requests: Receiver<TestRequest>) {
+/// Steps the engine once a second for the life of the app, and handles
+/// requests between steps.
+fn run_engine(app: AppHandle, requests: Receiver<EngineRequest>) {
     let overlay = Overlay::default();
     let window = ProcessWindow {
         process: DEADLOCK.process,
@@ -101,9 +105,18 @@ fn run_engine(app: AppHandle, test_requests: Receiver<TestRequest>) {
         engine.apply_settings(state.settings.read().unwrap().clone());
         let status = engine.step(started.elapsed(), SystemTime::now());
         publish(&app, &status);
-        // The engine refuses the test during a match.
-        for reply in test_requests.try_iter() {
-            let _ = reply.send(engine.test_recording(|status| publish(&app, status)));
+        for request in requests.try_iter() {
+            match request {
+                // The engine refuses the test during a match.
+                EngineRequest::TestRecording(reply) => {
+                    let _ = reply.send(engine.test_recording(|status| publish(&app, status)));
+                }
+                EngineRequest::Quit => {
+                    engine.quit();
+                    app.exit(0);
+                    return;
+                }
+            }
         }
         thread::sleep(STEP_INTERVAL);
     }
@@ -163,14 +176,14 @@ pub fn run() {
                     Settings::load_or_first_launch(path, || default_recordings_folder(&DEADLOCK))
                 })
                 .unwrap_or_default();
-            let (test_sender, test_receiver) = mpsc::channel();
+            let (request_sender, request_receiver) = mpsc::channel();
             let status = Status::idle();
             tray::install(app.handle(), &status)?;
             app.manage(AppState {
                 settings: RwLock::new(settings),
                 settings_path,
                 status: Mutex::new(status),
-                test_requests: Mutex::new(test_sender),
+                engine_requests: Mutex::new(request_sender),
             });
             // The window starts hidden (`visible: false`), so a launch at
             // login or the restart into an update shows nothing but the tray
@@ -190,7 +203,7 @@ pub fn run() {
             }
 
             let handle = app.handle().clone();
-            thread::spawn(move || run_engine(handle, test_receiver));
+            thread::spawn(move || run_engine(handle, request_receiver));
             update::start(app.handle().clone());
             Ok(())
         })
