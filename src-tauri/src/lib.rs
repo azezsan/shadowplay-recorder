@@ -43,7 +43,8 @@ fn specta_builder() -> Builder<tauri::Wry> {
         .disable_serde_phases()
         .commands(collect_commands![
             commands::get_status,
-            commands::get_recent_activity
+            commands::get_recent_activity,
+            commands::get_setup_report
         ])
         .events(collect_events![StatusChanged, activity::ActivityAdded])
 }
