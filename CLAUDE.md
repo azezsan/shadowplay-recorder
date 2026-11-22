@@ -110,7 +110,7 @@ Already done; kept for a new repo or a lost key. The steps run in this order, be
 
 ## Git flow
 
-Each task is done on its own branch in its own git worktree. When the task is finished, run `pnpm check`, commit, push, and open a PR with `gh pr create`. Then stop: the user reviews the PR and says when to merge. Merge only when they say so, with `pnpm merge <pr>`. Never push to `main` directly.
+Each task is done on its own branch in its own git worktree. When the task is finished, run `pnpm check`, commit, push, and open a PR with `gh pr create`. Merge with `pnpm merge <pr>`. Never push to `main` directly. When to merge is the rule in your own global `CLAUDE.md` ("When to merge"); with no such rule, stop once the PR is open and merge only when the user says so.
 
 ## Agent skills
 
