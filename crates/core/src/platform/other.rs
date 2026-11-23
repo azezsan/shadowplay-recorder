@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use super::ElevationError;
+use super::{DiskSpace, ElevationError};
 
 pub fn is_process_running(_name: &str) -> bool {
     false
@@ -22,4 +22,8 @@ pub fn focus_process(_name: &str) -> bool {
 
 pub fn is_foreground(_name: &str) -> bool {
     false
+}
+
+pub fn disk_space(_path: &Path) -> Option<DiskSpace> {
+    None
 }

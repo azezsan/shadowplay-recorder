@@ -26,8 +26,9 @@ export const commands = {
 	getSettings: (options?: InvokeOptions) => __TAURI_INVOKE<Settings>("get_settings", undefined, options),
 	/**
 	 *  Moves a parent folder down into the game's subfolder, clamps the
-	 *  settings, writes them to the settings file and hands them to
-	 *  the engine before its next step. Returns what was saved.
+	 *  settings, refuses a manual reserve over half the disk, writes them to the
+	 *  settings file and hands them to the engine before its next step. Returns
+	 *  what was saved.
 	 */
 	saveSettings: (settings: Settings, options?: InvokeOptions) => __TAURI_INVOKE<Settings>("save_settings", { settings }, options),
 	/**
@@ -132,11 +133,29 @@ export type Phase =
 /**  The match ended and the recording is kept running for the stop delay. */
 "finishing";
 
+/**  How the app decides when to delete the oldest recordings. */
+export type RetentionRule = 
+/**  Keep the recordings folder under `max_size_gb`. */
+"sizeCap" | 
+/**  Let recordings use the whole disk except the free-space reserve. */
+"fillDisk";
+
 export type Settings = {
 	/**  Where ShadowPlay saves recordings. Nothing is recorded while unset. */
 	recordingsFolder?: string | null,
-	/**  Size cap for the recordings folder, in GB. */
+	retentionRule?: RetentionRule,
+	/**
+	 *  Size cap for the recordings folder, in GB. Kept while fill the disk
+	 *  is in use, for switching back.
+	 */
 	maxSizeGb?: number | null,
+	/**
+	 *  Under fill the disk, use `reserve_gb` instead of the automatic
+	 *  free-space reserve.
+	 */
+	manualReserve?: boolean,
+	/**  The manual free-space reserve, in GB. Kept while unused. */
+	reserveGb?: number | null,
 	/**  How long to keep recording after a match ends. */
 	stopDelaySeconds?: number,
 	focusOnMatchStart?: boolean,
@@ -163,10 +182,31 @@ export type Status = {
 	testRecordingRunning: boolean,
 	/**  A test recording may be started now. */
 	testRecordingAllowed: boolean,
+	/**
+	 *  The recordings folder's disk, while fill the disk is in use and its
+	 *  free space could be read.
+	 */
+	storage: Storage | null,
 };
 
 /**  Emitted whenever the status changes. */
 export type StatusChanged = Status;
+
+/**  The disk fill the disk works on, as of its last check. Sizes are whole GB. */
+export type Storage = {
+	/**  The disk's name, such as `D:`. */
+	disk: string,
+	freeGb: number,
+	totalGb: number,
+	reserveGb: number,
+	/**  The reserve is the automatic one, not the user's. */
+	automatic: boolean,
+	/**
+	 *  Deleting every recording would not free the reserve, so the next
+	 *  recording may not fit.
+	 */
+	short: boolean,
+};
 
 /**  Why a test recording failed or was refused. */
 export type TestRecordingError = 

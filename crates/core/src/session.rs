@@ -147,6 +147,17 @@ impl<R: Recorder, W: GameWindow> Session<R, W> {
         self.current.as_ref().map(|m| m.id.as_str())
     }
 
+    /// When the recording in progress began to be asked for: any recording
+    /// file modified since then is it. `None` when nothing is being recorded
+    /// or started.
+    pub fn recording_since(&self) -> Option<SystemTime> {
+        match (&self.stop, &self.current) {
+            (Some(stop), _) => Some(stop.since),
+            (None, Some(current)) if current.entered => Some(current.started),
+            _ => None,
+        }
+    }
+
     pub fn phase(&self) -> Phase {
         if !self.running {
             Phase::Idle

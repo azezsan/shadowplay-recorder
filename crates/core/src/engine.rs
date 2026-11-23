@@ -1,5 +1,7 @@
 //! The background loop: polls the game process and its console log, feeds the
-//! match session, and applies the size cap after the game closes.
+//! match session, and applies the retention rule: the size cap after the
+//! game closes, or fill the disk's free-space reserve every minute and as a
+//! recordable map loads.
 //!
 //! `Engine::step` does one iteration and is called about once a second. It
 //! owns no thread and no clock; the shell calls it and passes the time in.
@@ -12,9 +14,11 @@ use serde::Serialize;
 
 use crate::game::GameProfile;
 use crate::overlay::RecordChannel;
+use crate::platform::DiskSpace;
 use crate::recorder::ShadowPlayRecorder;
+use crate::retention::{GIB, ReserveOutcome};
 use crate::session::{GameWindow, Phase, Session, SessionConfig};
-use crate::settings::Settings;
+use crate::settings::{RetentionRule, Settings};
 use crate::tail::Tailer;
 use crate::test_recording::{self, TestRecordingError, TestRecordingTiming};
 use crate::{platform, retention, setup};
@@ -28,6 +32,8 @@ const MISSING_LOG_WARNING_AFTER: Duration = Duration::from_secs(30);
 /// How often the overlay config is re-read for the debug switch, which an
 /// NVIDIA App update can remove while the app runs.
 const SWITCH_CHECK_INTERVAL: Duration = Duration::from_secs(60);
+/// How often fill the disk checks the free-space reserve.
+const RESERVE_CHECK_INTERVAL: Duration = Duration::from_secs(60);
 
 /// What the engine needs to ask the operating system.
 pub trait Host {
@@ -35,6 +41,8 @@ pub trait Host {
     fn steam_root(&self) -> Option<PathBuf>;
     /// True if the overlay config exists and lacks the debug switch.
     fn overlay_switch_missing(&self) -> bool;
+    /// The disk holding `folder`; `None` if it cannot be read.
+    fn disk_space(&self, folder: &Path) -> Option<DiskSpace>;
 }
 
 /// The real operating system.
@@ -52,6 +60,10 @@ impl Host for SystemHost {
     fn overlay_switch_missing(&self) -> bool {
         setup::overlay_switch_missing()
     }
+
+    fn disk_space(&self, folder: &Path) -> Option<DiskSpace> {
+        platform::disk_space(folder)
+    }
 }
 
 /// What the app is doing right now, for the status line and the tray.
@@ -66,6 +78,42 @@ pub struct Status {
     pub test_recording_running: bool,
     /// A test recording may be started now.
     pub test_recording_allowed: bool,
+    /// The recordings folder's disk, while fill the disk is in use and its
+    /// free space could be read.
+    pub storage: Option<Storage>,
+}
+
+/// The disk fill the disk works on, as of its last check. Sizes are whole GB.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase")]
+pub struct Storage {
+    /// The disk's name, such as `D:`.
+    pub disk: String,
+    pub free_gb: u32,
+    pub total_gb: u32,
+    pub reserve_gb: u32,
+    /// The reserve is the automatic one, not the user's.
+    pub automatic: bool,
+    /// Deleting every recording would not free the reserve, so the next
+    /// recording may not fit.
+    pub short: bool,
+}
+
+/// The disk part of a Windows path, such as `D:` or `\\server\share`.
+fn disk_name(folder: &str) -> String {
+    let bytes = folder.as_bytes();
+    if bytes.len() >= 2 && bytes[1] == b':' {
+        return folder[..2].to_uppercase();
+    }
+    if let Some(rest) = folder.strip_prefix(r"\\") {
+        let share: Vec<_> = rest.splitn(3, '\\').take(2).collect();
+        return format!(r"\\{}", share.join(r"\"));
+    }
+    folder.to_string()
+}
+
+fn whole_gb(bytes: u64) -> u32 {
+    u32::try_from(bytes / GIB).unwrap_or(u32::MAX)
 }
 
 impl Status {
@@ -86,6 +134,7 @@ impl Status {
             match_id,
             test_recording_running,
             test_recording_allowed: !test_recording_running && test_recording::allowed_in(phase),
+            storage: None,
         }
     }
 }
@@ -133,6 +182,10 @@ pub struct Engine<C: RecordChannel, W: GameWindow, H: Host> {
     switch_missing: Option<bool>,
     window_requested: bool,
     test_recording_timing: TestRecordingTiming,
+    next_reserve_check: Duration,
+    /// Fill the disk's last check.
+    storage: Option<Storage>,
+    warned_disk_unreadable: bool,
 }
 
 impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
@@ -155,6 +208,9 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             switch_missing: None,
             window_requested: false,
             test_recording_timing: TestRecordingTiming::default(),
+            next_reserve_check: Duration::ZERO,
+            storage: None,
+            warned_disk_unreadable: false,
         };
         engine.apply_settings(Settings::default());
         engine
@@ -184,6 +240,20 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
         if settings.console_log != self.settings.console_log {
             self.tailer = None;
         }
+        let retention_changed = (
+            settings.retention_rule,
+            settings.manual_reserve,
+            settings.reserve_gb,
+        ) != (
+            self.settings.retention_rule,
+            self.settings.manual_reserve,
+            self.settings.reserve_gb,
+        );
+        if retention_changed {
+            // Show the new rule's effect at the next step.
+            self.next_reserve_check = Duration::ZERO;
+            self.storage = None;
+        }
         self.settings = settings;
         self.take_up_folder();
     }
@@ -212,12 +282,15 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
     }
 
     fn status_with(&self, test_recording_running: bool) -> Status {
-        Status::new(
-            self.game,
-            self.session.phase(),
-            self.session.match_id().map(str::to_string),
-            test_recording_running,
-        )
+        Status {
+            storage: self.storage.clone(),
+            ..Status::new(
+                self.game,
+                self.session.phase(),
+                self.session.match_id().map(str::to_string),
+                test_recording_running,
+            )
+        }
     }
 
     /// Runs the setup checklist's test recording and returns the path of the
@@ -293,21 +366,99 @@ impl<C: RecordChannel, W: GameWindow, H: Host> Engine<C, W, H> {
             }
         }
 
+        let was_starting = self.session.phase() == Phase::Starting;
         if self.session.is_running() {
             self.read_console_log(now, wall);
         }
+        // A recordable map has just loaded: make room before the start
+        // command is sent.
+        if !was_starting && self.session.phase() == Phase::Starting {
+            self.next_reserve_check = now;
+        }
+        self.keep_reserve(now);
         self.session.tick(now);
         // A match may have just ended.
         self.take_up_folder();
 
         if self.cleanup_at.is_some_and(|at| now >= at) {
             self.cleanup_at = None;
-            if let Some(folder) = &self.folder {
+            if let Some(folder) = &self.folder
+                && self.settings.retention_rule == RetentionRule::SizeCap
+            {
                 let cap = retention::gib_to_bytes(self.settings.max_size_gb);
                 retention::enforce_size_cap(Path::new(folder), cap);
             }
         }
         self.status()
+    }
+
+    /// Under fill the disk, deletes the oldest recordings until the
+    /// free-space reserve is free, once a minute or when asked for sooner.
+    fn keep_reserve(&mut self, now: Duration) {
+        if self.settings.retention_rule != RetentionRule::FillDisk {
+            self.storage = None;
+            self.warned_disk_unreadable = false;
+            return;
+        }
+        if now < self.next_reserve_check {
+            return;
+        }
+        self.next_reserve_check = now + RESERVE_CHECK_INTERVAL;
+        let Some(folder) = self.folder.clone() else {
+            self.storage = None;
+            return;
+        };
+        let folder_path = Path::new(&folder);
+        let disk = disk_name(&folder);
+        let Some(space) = self.host.disk_space(folder_path) else {
+            if !self.warned_disk_unreadable {
+                self.warned_disk_unreadable = true;
+                log::warn!(
+                    "could not read the free space on {disk}; no recordings are deleted until it can be read"
+                );
+            }
+            self.storage = None;
+            return;
+        };
+        if self.warned_disk_unreadable {
+            self.warned_disk_unreadable = false;
+            log::info!("the free space on {disk} can be read again");
+        }
+
+        let manual = self.settings.manual_reserve_bytes(space.total);
+        let reserve = manual.unwrap_or_else(|| retention::automatic_reserve(folder_path));
+        let outcome = retention::keep_reserve(
+            folder_path,
+            space.free,
+            reserve,
+            self.session.recording_since(),
+        );
+        let short = outcome == ReserveOutcome::Short;
+        let was_short = self.storage.as_ref().is_some_and(|s| s.short);
+        if short && !was_short {
+            log::warn!(
+                "{disk} is short of its {} GB free-space reserve, and deleting every recording would not free it; the next recording may not fit",
+                reserve.div_ceil(GIB)
+            );
+        } else if !short && was_short {
+            log::info!("{disk} has its free-space reserve again");
+        }
+        let free = if space.free < reserve && !short {
+            // Deleted something: show the space it freed.
+            self.host
+                .disk_space(folder_path)
+                .map_or(space.free, |s| s.free)
+        } else {
+            space.free
+        };
+        self.storage = Some(Storage {
+            disk,
+            free_gb: whole_gb(free),
+            total_gb: whole_gb(space.total),
+            reserve_gb: u32::try_from(reserve.div_ceil(GIB)).unwrap_or(u32::MAX),
+            automatic: manual.is_none(),
+            short,
+        });
     }
 
     fn read_console_log(&mut self, now: Duration, wall: SystemTime) {
@@ -367,9 +518,14 @@ mod tests {
     use crate::recorder::testing::{FakeChannel, Mode};
     use crate::update;
 
+    /// A disk of `total` bytes holding `other` bytes besides the recordings
+    /// folder, or `None` for a disk that cannot be read.
+    type FakeDisk = Rc<Cell<Option<(u64, u64)>>>;
+
     struct FakeHost {
         running: Rc<Cell<bool>>,
         switch_missing: Rc<Cell<bool>>,
+        disk: FakeDisk,
     }
 
     impl Host for FakeHost {
@@ -383,6 +539,20 @@ mod tests {
 
         fn steam_root(&self) -> Option<PathBuf> {
             None
+        }
+
+        /// The free space follows what the recordings folder holds, so
+        /// deleting a recording frees its size.
+        fn disk_space(&self, folder: &Path) -> Option<DiskSpace> {
+            let (total, other) = self.disk.get()?;
+            let recordings: u64 = fs::read_dir(folder)
+                .unwrap()
+                .map(|e| e.unwrap().metadata().unwrap().len())
+                .sum();
+            Some(DiskSpace {
+                free: total.saturating_sub(other + recordings),
+                total,
+            })
         }
     }
 
@@ -407,6 +577,7 @@ mod tests {
         settings: Settings,
         running: Rc<Cell<bool>>,
         switch_missing: Rc<Cell<bool>>,
+        disk: FakeDisk,
         focuses: Rc<Cell<u32>>,
         log: PathBuf,
         recordings: PathBuf,
@@ -423,11 +594,13 @@ mod tests {
             fs::write(&log, "old session line\n").unwrap();
             let running = Rc::new(Cell::new(false));
             let switch_missing = Rc::new(Cell::new(false));
+            let disk = Rc::new(Cell::new(Some((1000 * GIB, 0))));
 
             let channel = FakeChannel::new(Some(&recordings), Mode::Ok);
             let host = FakeHost {
                 running: running.clone(),
                 switch_missing: switch_missing.clone(),
+                disk: disk.clone(),
             };
             let focuses = Rc::new(Cell::new(0));
             let window = FakeWindow {
@@ -459,6 +632,7 @@ mod tests {
                 settings,
                 running,
                 switch_missing,
+                disk,
                 focuses,
                 log,
                 recordings,
@@ -491,6 +665,32 @@ mod tests {
 
         fn sent(&mut self) -> Vec<RecordCommand> {
             self.engine.channel_mut().sent.clone()
+        }
+
+        /// Writes a video of `gib` GB, last modified `age_hours` ago.
+        fn video(&self, name: &str, gib: u64, age_hours: u64) -> PathBuf {
+            let path = self.recordings.join(name);
+            let file = File::create(&path).unwrap();
+            file.set_len(gib * GIB).unwrap();
+            file.set_modified(SystemTime::now() - Duration::from_secs(age_hours * 3600))
+                .unwrap();
+            path
+        }
+
+        /// Switches to fill the disk with a manual reserve of `reserve_gb`,
+        /// on a 100 GB disk holding `other_gb` besides the recordings.
+        fn fill_the_disk(&mut self, reserve_gb: f64, other_gb: u64) {
+            self.disk.set(Some((100 * GIB, other_gb * GIB)));
+            self.change_settings(|s| {
+                s.retention_rule = RetentionRule::FillDisk;
+                s.manual_reserve = true;
+                s.reserve_gb = reserve_gb;
+            });
+        }
+
+        /// Something other than a recording now takes `other_gb` of the disk.
+        fn set_other_gb(&self, other_gb: u64) {
+            self.disk.set(Some((100 * GIB, other_gb * GIB)));
         }
     }
 
@@ -684,6 +884,131 @@ mod tests {
         f.run(CLEANUP_DELAY.as_secs());
         assert!(!old.exists());
         assert!(new.exists());
+    }
+
+    #[test]
+    fn fill_the_disk_keeps_the_reserve_free_every_minute() {
+        let mut f = Fixture::new(true);
+        let old = f.video("1.mp4", 1, 3);
+        let mid = f.video("2.mp4", 1, 2);
+        f.fill_the_disk(2.0, 95);
+        let storage = f.run(1).storage.unwrap();
+        assert_eq!(
+            (storage.free_gb, storage.total_gb, storage.reserve_gb),
+            (3, 100, 2)
+        );
+        assert!(!storage.automatic);
+        assert!(old.exists() && mid.exists(), "3 GB free covers the reserve");
+
+        // A Steam download takes 2 GB more between checks.
+        f.set_other_gb(97);
+        f.run(RESERVE_CHECK_INTERVAL.as_secs() - 1);
+        assert!(old.exists(), "not checked again before the minute is up");
+        let storage = f.run(1).storage.unwrap();
+        assert!(!old.exists());
+        assert!(mid.exists());
+        assert_eq!(storage.free_gb, 2);
+        assert!(!storage.short);
+    }
+
+    #[test]
+    fn fill_the_disk_makes_room_as_a_recordable_map_loads() {
+        let mut f = Fixture::new(true);
+        let old = f.video("1.mp4", 1, 3);
+        f.fill_the_disk(2.0, 90);
+        f.run(1);
+        f.running.set(true);
+        f.run(3);
+
+        f.set_other_gb(98);
+        f.write_log("Lobby 5 for Match 9 created\n[Client] Map: \"start\"\n");
+        assert_eq!(f.run(2).phase, Phase::Recording);
+        assert!(!old.exists(), "deleted well before the minute's check");
+        assert!(f.recordings.join("DefaultShadowPlay.mp4").exists());
+    }
+
+    #[test]
+    fn fill_the_disk_never_deletes_the_recording_in_progress() {
+        let mut f = Fixture::new(true);
+        let old = f.video("1.mp4", 1, 3);
+        f.fill_the_disk(4.0, 50);
+        f.running.set(true);
+        f.run(3);
+        f.write_log("Lobby 5 for Match 9 created\n[Client] Map: \"start\"\n");
+        assert_eq!(f.run(2).phase, Phase::Recording);
+        // The recording grows to 3 GB while the disk fills up.
+        let in_progress = f.recordings.join("DefaultShadowPlay.mp4");
+        File::options()
+            .write(true)
+            .open(&in_progress)
+            .unwrap()
+            .set_len(3 * GIB)
+            .unwrap();
+        f.set_other_gb(94);
+
+        // 2 GB free; deleting the old recording would only make it 3 GB.
+        let storage = f.run(RESERVE_CHECK_INTERVAL.as_secs()).storage.unwrap();
+        assert!(storage.short);
+        assert!(
+            old.exists(),
+            "nothing is deleted when it would not be enough"
+        );
+        assert!(in_progress.exists());
+
+        // The download is cleaned up; the reserve can be kept again.
+        f.set_other_gb(93);
+        let storage = f.run(RESERVE_CHECK_INTERVAL.as_secs()).storage.unwrap();
+        assert!(!storage.short);
+        assert!(!old.exists());
+        assert!(in_progress.exists());
+    }
+
+    #[test]
+    fn fill_the_disk_deletes_nothing_when_the_disk_cannot_be_read() {
+        let mut f = Fixture::new(true);
+        let old = f.video("1.mp4", 1, 3);
+        f.fill_the_disk(2.0, 99);
+        f.disk.set(None);
+        assert_eq!(f.run(1).storage, None);
+        assert!(old.exists());
+
+        f.set_other_gb(98);
+        f.run(RESERVE_CHECK_INTERVAL.as_secs());
+        assert!(!old.exists(), "checked again once the disk can be read");
+    }
+
+    #[test]
+    fn fill_the_disk_starts_with_the_automatic_reserve() {
+        let mut f = Fixture::new(true);
+        f.fill_the_disk(2.0, 0);
+        f.change_settings(|s| s.manual_reserve = false);
+        let storage = f.run(1).storage.unwrap();
+        assert!(storage.automatic);
+        assert_eq!(storage.reserve_gb, 30);
+    }
+
+    #[test]
+    fn fill_the_disk_replaces_the_size_cap() {
+        let mut f = Fixture::new(true);
+        let old = f.video("1.mp4", 1, 2);
+        let new = f.video("2.mp4", 1, 1);
+        f.fill_the_disk(2.0, 0);
+        f.running.set(true);
+        f.run(3);
+        f.running.set(false);
+        f.run(6 + CLEANUP_DELAY.as_secs());
+        assert!(old.exists() && new.exists(), "2 GB is over the 1 GB cap");
+
+        // Back on the size cap, the status no longer shows the disk.
+        f.change_settings(|s| s.retention_rule = RetentionRule::SizeCap);
+        assert_eq!(f.run(1).storage, None);
+    }
+
+    #[test]
+    fn names_the_disk_of_a_folder() {
+        assert_eq!(disk_name(r"d:\Videos\NVIDIA"), "D:");
+        assert_eq!(disk_name(r"\\nas\videos\NVIDIA"), r"\\nas\videos");
+        assert_eq!(disk_name("/Users/me"), "/Users/me");
     }
 
     #[test]

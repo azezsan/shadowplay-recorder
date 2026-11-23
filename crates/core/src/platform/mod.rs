@@ -1,6 +1,6 @@
 //! The only code that calls the operating system directly: finding the game
-//! process, moving its window to the foreground, locating Steam, and running
-//! a command with administrator rights.
+//! process, moving its window to the foreground, locating Steam, reading a
+//! disk's free space, and running a command with administrator rights.
 //!
 //! `windows` is the real implementation. `other` answers "not available" so
 //! the workspace builds and tests on macOS and Linux.
@@ -25,6 +25,19 @@ pub fn is_process_running(name: &str) -> bool {
 /// Where Steam is installed.
 pub fn steam_root() -> Option<PathBuf> {
     imp::steam_root()
+}
+
+/// The size and free space of a disk, in bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DiskSpace {
+    /// Free space this user may write to.
+    pub free: u64,
+    pub total: u64,
+}
+
+/// The disk holding `path`, which must exist.
+pub fn disk_space(path: &Path) -> Option<DiskSpace> {
+    imp::disk_space(path)
 }
 
 /// Why a program could not be run with administrator rights.

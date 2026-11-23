@@ -3,6 +3,7 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{CloseHandle, ERROR_CANCELLED, HWND, LPARAM};
+use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
 };
@@ -18,7 +19,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{BOOL, PCWSTR, w};
 
-use super::ElevationError;
+use super::{DiskSpace, ElevationError};
 
 fn wide(text: impl AsRef<std::ffi::OsStr>) -> Vec<u16> {
     text.as_ref().encode_wide().chain(Some(0)).collect()
@@ -80,6 +81,23 @@ pub fn steam_root() -> Option<PathBuf> {
     let len = buffer.iter().position(|&c| c == 0)?;
     let path = PathBuf::from(String::from_utf16_lossy(&buffer[..len]));
     path.is_dir().then_some(path)
+}
+
+pub fn disk_space(path: &Path) -> Option<DiskSpace> {
+    let path = wide(path);
+    let (mut free, mut total) = (0u64, 0u64);
+    // SAFETY: `path` is NUL-terminated and outlives the call, and both
+    // outputs are writable u64s.
+    unsafe {
+        GetDiskFreeSpaceExW(
+            PCWSTR(path.as_ptr()),
+            Some(&mut free),
+            Some(&mut total),
+            None,
+        )
+    }
+    .ok()?;
+    Some(DiskSpace { free, total })
 }
 
 pub fn run_elevated(program: &Path, arguments: &str) -> Result<u32, ElevationError> {

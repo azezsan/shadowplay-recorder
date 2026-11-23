@@ -44,11 +44,22 @@ The time after a recordable map loads during which the start command is re-sent 
 How long recording continues after a match ends, to capture the post-match screen.
 
 **Recordings folder**:
-The folder ShadowPlay saves recordings to, and the folder the size cap applies to.
+The folder ShadowPlay saves recordings to, and the folder the retention rule applies to.
+
+**Retention rule**:
+How the app decides when to delete the oldest recordings: either the size cap or fill the disk.
+_Avoid_: Mode, policy
 
 **Size cap**:
-The largest total size the recordings folder may reach before the oldest recordings are deleted.
+The retention rule that deletes the oldest recordings once the recordings folder grows past a chosen total size.
 _Avoid_: Quota, limit
+
+**Fill the disk**:
+The retention rule that lets recordings use the whole disk holding the recordings folder, except the free-space reserve.
+
+**Free-space reserve**:
+The free space kept on the recordings folder's disk so the next recording fits. Under fill the disk, the oldest recordings are deleted to keep it.
+_Avoid_: Headroom, buffer
 
 ### NVIDIA
 
