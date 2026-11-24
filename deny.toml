@@ -6,6 +6,12 @@ targets = ["x86_64-pc-windows-msvc", "aarch64-apple-darwin"]
 [advisories]
 # Unmaintained crates deep inside Tauri's Linux stack are not ours to replace.
 unmaintained = "workspace"
+ignore = [
+  # cookie (via tauri, wry): private-cookie nonces repeat across fork(). The
+  # advisory excludes processes that never fork, which includes everything on
+  # Windows, and Tauri pins cookie ^0.18, which has no fixed release.
+  { id = "RUSTSEC-2026-0594", reason = "Windows-only app never forks; no fixed cookie 0.18" },
+]
 
 [licenses]
 confidence-threshold = 0.9
