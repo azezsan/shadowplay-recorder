@@ -9,13 +9,14 @@ use recorder_core::game::DEADLOCK;
 use recorder_core::settings::Settings;
 use recorder_core::setup::{self, SetupReport};
 use recorder_core::test_recording::TestRecordingError;
+use recorder_core::update::Outcome;
 use recorder_core::{overlay_setup, platform};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
 
 use crate::activity::{self, ActivityEntry};
-use crate::{AppState, EngineRequest};
+use crate::{AppState, EngineRequest, update};
 
 /// The current status, for a window that has just opened. Later changes
 /// arrive as `StatusChanged` events.
@@ -112,6 +113,17 @@ pub async fn pick_console_log(app: AppHandle, current: Option<String>) -> Option
 #[specta::specta]
 pub fn get_version(app: AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+/// Checks for a newer version now and installs it unless Deadlock is
+/// running; installing restarts the app. Blocks for the download, so it runs
+/// off the main thread.
+#[tauri::command]
+#[specta::specta]
+pub async fn check_for_update(app: AppHandle) -> Outcome {
+    tauri::async_runtime::spawn_blocking(move || update::check_now(&app))
+        .await
+        .expect("the update check panicked")
 }
 
 /// Adds the debug switch to the NVIDIA overlay config: the app relaunches
