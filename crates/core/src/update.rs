@@ -4,12 +4,15 @@
 //! the operations, through [`Updater`], with Tauri's updater; this module
 //! decides the order and when to hold back. Installing restarts the app, so it
 //! happens only while the phase is idle and no test recording runs: an
-//! update can never cut off a recording.
+//! update can never cut off a recording. The background loop and the
+//! window's "Check for updates" button both run `attempt`.
 
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use serde::Serialize;
 
 use crate::engine::Status;
 use crate::session::Phase;
@@ -28,17 +31,19 @@ const RETRY_DELAY: Duration = Duration::from_secs(10 * 60);
 const RELAUNCH_MARK_LIFETIME: Duration = Duration::from_secs(10 * 60);
 
 /// What one update attempt came to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, specta::Type)]
+#[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Outcome {
     /// No newer release exists.
     UpToDate,
     /// A newer release exists but the game is running, so it was not
     /// installed.
-    Deferred,
-    /// The check, download or install failed.
-    Failed,
+    Deferred { version: String },
+    /// The check, download or install failed, or no attempt could be made.
+    /// The reason is a sentence fragment for the user.
+    Failed { reason: String },
     /// The update was installed; the app must restart into it.
-    Installed,
+    Installed { version: String },
 }
 
 /// What an update attempt needs from the updater.
@@ -69,21 +74,25 @@ pub fn attempt(
         Ok(None) => return Outcome::UpToDate,
         Err(e) => {
             log::warn!("could not check for updates: {e}");
-            return Outcome::Failed;
+            return Outcome::Failed {
+                reason: format!("could not check for updates: {e}"),
+            };
         }
     };
     if !may_install_now() {
         log::info!("version {version} is available; it will install once Deadlock closes");
-        return Outcome::Deferred;
+        return Outcome::Deferred { version };
     }
     log::info!("downloading version {version}");
     if let Err(e) = updater.download() {
         log::warn!("could not download version {version}: {e}");
-        return Outcome::Failed;
+        return Outcome::Failed {
+            reason: format!("could not download version {version}: {e}"),
+        };
     }
     if !may_install_now() {
         log::info!("version {version} is downloaded; it will install once Deadlock closes");
-        return Outcome::Deferred;
+        return Outcome::Deferred { version };
     }
     log::info!("installing version {version} and restarting");
     if let Some(marker) = relaunch_marker
@@ -96,9 +105,11 @@ pub fn attempt(
         if let Some(marker) = relaunch_marker {
             let _ = fs::remove_file(marker);
         }
-        return Outcome::Failed;
+        return Outcome::Failed {
+            reason: format!("could not install version {version}: {e}"),
+        };
     }
-    Outcome::Installed
+    Outcome::Installed { version }
 }
 
 /// Marks the next launch as the restart into an update.
@@ -128,10 +139,12 @@ pub fn take_relaunch_mark(marker: &Path, now: SystemTime) -> bool {
 }
 
 /// How long to wait before the next attempt after `outcome`.
-pub fn next_attempt_after(outcome: Outcome) -> Duration {
+pub fn next_attempt_after(outcome: &Outcome) -> Duration {
     match outcome {
         Outcome::UpToDate => CHECK_INTERVAL,
-        Outcome::Deferred | Outcome::Failed | Outcome::Installed => RETRY_DELAY,
+        Outcome::Deferred { .. } | Outcome::Failed { .. } | Outcome::Installed { .. } => {
+            RETRY_DELAY
+        }
     }
 }
 
@@ -222,10 +235,22 @@ mod tests {
         }
     }
 
+    fn installed() -> Outcome {
+        Outcome::Installed {
+            version: "0.2.0".into(),
+        }
+    }
+
+    fn deferred() -> Outcome {
+        Outcome::Deferred {
+            version: "0.2.0".into(),
+        }
+    }
+
     #[test]
     fn an_attempt_installs_a_newer_release() {
         let mut updater = FakeUpdater::new(Some("0.2.0"));
-        assert_eq!(attempt(&mut updater, None, || true), Outcome::Installed);
+        assert_eq!(attempt(&mut updater, None, || true), installed());
         assert_eq!(updater.ran, ["check", "download", "install"]);
     }
 
@@ -234,10 +259,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let marker = dir.path().join("relaunch");
         let mut updater = FakeUpdater::new(Some("0.2.0"));
-        assert_eq!(
-            attempt(&mut updater, Some(&marker), || true),
-            Outcome::Installed
-        );
+        assert_eq!(attempt(&mut updater, Some(&marker), || true), installed());
         let now = SystemTime::now();
         assert!(take_relaunch_mark(&marker, now));
         assert!(!take_relaunch_mark(&marker, now), "the mark is used once");
@@ -249,10 +271,10 @@ mod tests {
         let marker = dir.path().join("relaunch");
         let mut updater = FakeUpdater::new(Some("0.2.0"));
         updater.fails = Some("install");
-        assert_eq!(
+        assert!(matches!(
             attempt(&mut updater, Some(&marker), || true),
-            Outcome::Failed
-        );
+            Outcome::Failed { .. }
+        ));
         assert!(!take_relaunch_mark(&marker, SystemTime::now()));
     }
 
@@ -276,7 +298,7 @@ mod tests {
     #[test]
     fn an_attempt_waits_for_the_game_to_close_before_downloading() {
         let mut updater = FakeUpdater::new(Some("0.2.0"));
-        assert_eq!(attempt(&mut updater, None, || false), Outcome::Deferred);
+        assert_eq!(attempt(&mut updater, None, || false), deferred());
         assert_eq!(updater.ran, ["check"]);
     }
 
@@ -285,10 +307,7 @@ mod tests {
         let running = Rc::new(Cell::new(false));
         let mut updater = FakeUpdater::new(Some("0.2.0"));
         updater.game_starts_during_download = Some(running.clone());
-        assert_eq!(
-            attempt(&mut updater, None, || !running.get()),
-            Outcome::Deferred
-        );
+        assert_eq!(attempt(&mut updater, None, || !running.get()), deferred());
         assert_eq!(updater.ran, ["check", "download"]);
     }
 
@@ -301,11 +320,11 @@ mod tests {
         ] {
             let mut updater = FakeUpdater::new(Some("0.2.0"));
             updater.fails = Some(failing);
-            assert_eq!(
-                attempt(&mut updater, None, || true),
-                Outcome::Failed,
-                "{failing}"
-            );
+            let outcome = attempt(&mut updater, None, || true);
+            let Outcome::Failed { reason } = outcome else {
+                panic!("{failing}: {outcome:?}");
+            };
+            assert!(reason.contains(&format!("{failing} failed")), "{reason}");
             assert_eq!(updater.ran, ran);
         }
     }
@@ -313,15 +332,20 @@ mod tests {
     #[test]
     fn checks_every_few_hours_when_up_to_date() {
         assert_eq!(
-            next_attempt_after(Outcome::UpToDate),
+            next_attempt_after(&Outcome::UpToDate),
             Duration::from_secs(4 * 60 * 60)
         );
     }
 
     #[test]
     fn retries_a_deferred_or_failed_update_within_minutes() {
-        for outcome in [Outcome::Deferred, Outcome::Failed] {
-            assert_eq!(next_attempt_after(outcome), Duration::from_secs(10 * 60));
+        for outcome in [
+            deferred(),
+            Outcome::Failed {
+                reason: "offline".into(),
+            },
+        ] {
+            assert_eq!(next_attempt_after(&outcome), Duration::from_secs(10 * 60));
         }
     }
 }

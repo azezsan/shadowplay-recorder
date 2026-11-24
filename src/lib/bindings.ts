@@ -44,6 +44,12 @@ export const commands = {
 	/**  The version of the running app, shown in the window. */
 	getVersion: (options?: InvokeOptions) => __TAURI_INVOKE<string>("get_version", undefined, options),
 	/**
+	 *  Checks for a newer version now and installs it unless Deadlock is
+	 *  running; installing restarts the app. Blocks for the download, so it runs
+	 *  off the main thread.
+	 */
+	checkForUpdate: (options?: InvokeOptions) => __TAURI_INVOKE<Outcome>("check_for_update", undefined, options),
+	/**
 	 *  Adds the debug switch to the NVIDIA overlay config: the app relaunches
 	 *  itself with administrator rights and `--patch-overlay`, behind one
 	 *  Windows prompt. The error is a sentence for the user.
@@ -98,6 +104,23 @@ export type FolderState = "ready" | "notSet" |
 "missing";
 
 export type Level = "info" | "warning" | "error";
+
+/**  What one update attempt came to. */
+export type Outcome = 
+/**  No newer release exists. */
+{ kind: "upToDate" } | 
+/**
+ *  A newer release exists but the game is running, so it was not
+ *  installed.
+ */
+{ kind: "deferred"; version: string } | 
+/**
+ *  The check, download or install failed, or no attempt could be made.
+ *  The reason is a sentence fragment for the user.
+ */
+{ kind: "failed"; reason: string } | 
+/**  The update was installed; the app must restart into it. */
+{ kind: "installed"; version: string };
 
 export type OverlayState = "ready" | 
 /**  The NVIDIA App's overlay config file was not found. */

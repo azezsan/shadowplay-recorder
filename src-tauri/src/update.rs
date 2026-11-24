@@ -1,5 +1,6 @@
-//! Self-update: checks GitHub Releases in the background and installs a newer
-//! version while the game is not running.
+//! Self-update: checks GitHub Releases in the background, or when the window's
+//! "Check for updates" button asks, and installs a newer version while the
+//! game is not running.
 //!
 //! The endpoint and the public key that verifies an update's signature are
 //! `plugins.updater` in `tauri.conf.json`. The attempt itself (the order of
@@ -7,6 +8,7 @@
 //! is `recorder_core::update::attempt`; this module supplies Tauri's updater.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::thread;
 
 use recorder_core::update::{self, FIRST_CHECK_DELAY, Outcome, Updater, next_attempt_after};
@@ -15,6 +17,10 @@ use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
 use crate::AppState;
+
+/// Held for the length of an attempt, so the background loop and the button
+/// never update at the same time.
+static ATTEMPT: Mutex<()> = Mutex::new(());
 
 /// Starts the update loop on its own thread. Development builds never
 /// update: they would replace themselves with the latest release.
@@ -32,17 +38,52 @@ pub fn start(app: AppHandle) {
                 update: None,
                 bytes: None,
             };
-            let outcome = update::attempt(&mut updater, marker.as_deref(), || {
-                update::may_install(&app.state::<AppState>().status.lock().unwrap())
-            });
-            if outcome == Outcome::Installed {
+            let outcome = {
+                let _attempt = ATTEMPT.lock().unwrap();
+                update::attempt(&mut updater, marker.as_deref(), may_install_now(&app))
+            };
+            if matches!(outcome, Outcome::Installed { .. }) {
                 // Only reached where installing does not end the process
                 // itself; on Windows the installer restarts the app.
                 app.restart();
             }
-            thread::sleep(next_attempt_after(outcome));
+            thread::sleep(next_attempt_after(&outcome));
         }
     });
+}
+
+/// Checks now and installs a newer version unless the game is running, for
+/// the window's button. Blocks for the download. The restart is not marked,
+/// so the updated app opens its window again.
+pub fn check_now(app: &AppHandle) -> Outcome {
+    if cfg!(debug_assertions) {
+        return Outcome::Failed {
+            reason: "development builds do not update".into(),
+        };
+    }
+    let Ok(_attempt) = ATTEMPT.try_lock() else {
+        return Outcome::Failed {
+            reason: "an update is already being checked for; try again in a minute".into(),
+        };
+    };
+    log::info!("checking for updates, as asked");
+    let mut updater = TauriUpdater {
+        app,
+        update: None,
+        bytes: None,
+    };
+    let outcome = update::attempt(&mut updater, None, may_install_now(app));
+    if matches!(outcome, Outcome::UpToDate) {
+        log::info!("the app is up to date");
+    }
+    if matches!(outcome, Outcome::Installed { .. }) {
+        app.restart();
+    }
+    outcome
+}
+
+fn may_install_now(app: &AppHandle) -> impl Fn() -> bool + '_ {
+    || update::may_install(&app.state::<AppState>().status.lock().unwrap())
 }
 
 /// Where the restart into an update is marked, so it starts in the tray.
