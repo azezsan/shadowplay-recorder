@@ -6,10 +6,10 @@ use std::sync::mpsc;
 
 use recorder_core::engine::Status;
 use recorder_core::game::DEADLOCK;
-use recorder_core::overlay_setup;
 use recorder_core::settings::Settings;
 use recorder_core::setup::{self, SetupReport};
 use recorder_core::test_recording::TestRecordingError;
+use recorder_core::{overlay_setup, platform};
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_dialog::DialogExt;
@@ -53,8 +53,9 @@ pub fn get_settings(state: State<'_, AppState>) -> Settings {
 }
 
 /// Moves a parent folder down into the game's subfolder, clamps the
-/// settings, writes them to the settings file and hands them to
-/// the engine before its next step. Returns what was saved.
+/// settings, refuses a manual reserve over half the disk, writes them to the
+/// settings file and hands them to the engine before its next step. Returns
+/// what was saved.
 #[tauri::command]
 #[specta::specta]
 pub fn save_settings(
@@ -62,7 +63,9 @@ pub fn save_settings(
     mut settings: Settings,
 ) -> Result<Settings, String> {
     settings.use_game_subfolder(&DEADLOCK);
-    let settings = settings.save_from_window(state.settings_path.as_deref())?;
+    let settings = settings.save_from_window(state.settings_path.as_deref(), |folder| {
+        platform::disk_space(folder).map(|space| space.total)
+    })?;
     *state.settings.write().unwrap() = settings.clone();
     Ok(settings)
 }
